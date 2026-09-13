@@ -1,0 +1,7 @@
+<mujoco model="encoder-fixture">
+  <option timestep="0.002" gravity="0 0 0"/>
+  <worldbody><body name="rotor"><joint name="motor_joint" type="hinge" axis="0 0 1"/>
+    <geom type="sphere" size="0.1" mass="1"/>
+  </body></worldbody>
+  <actuator><velocity name="motor" joint="motor_joint" kv="1"/></actuator>
+</mujoco>

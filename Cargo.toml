@@ -1,0 +1,103 @@
+[workspace]
+resolver = "3"
+
+[package]
+name = "phoxal-simulator-mujoco"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "AGPL-3.0-only"
+publish = ["phoxal"]
+description = "Independent Phoxal MuJoCo simulator application."
+documentation = "https://docs.rs/phoxal-simulator-mujoco"
+homepage = "https://github.com/phoxal/simulator"
+repository = "https://github.com/phoxal/simulator"
+
+[[bin]]
+name = "phoxal-simulator-mujoco"
+path = "src/main.rs"
+required-features = ["native"]
+
+[features]
+default = ["native"]
+native = [
+    "dep:phoxal-mujoco",
+    "dep:phoxal-component-bno085",
+    "dep:phoxal-component-ddsm115",
+    "dep:phoxal-component-oak_d_lite",
+    "dep:phoxal-component-vl53l1x",
+    "dep:phoxal-component-zed_f9p",
+    "phoxal-mujoco/native",
+    "phoxal-mujoco/rendering",
+]
+[dependencies]
+eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+phoxal-mujoco = {
+    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    version = "0.1.0",
+    default-features = false,
+    optional = true,
+}
+phoxal-component-bno085 = {
+    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    version = "0.68.0",
+    default-features = false,
+    optional = true,
+}
+phoxal-component-ddsm115 = {
+    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    version = "0.68.0",
+    default-features = false,
+    optional = true,
+}
+phoxal-component-oak_d_lite = {
+    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    version = "0.68.0",
+    default-features = false,
+    optional = true,
+}
+phoxal-component-vl53l1x = {
+    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    version = "0.68.0",
+    default-features = false,
+    optional = true,
+}
+phoxal-component-zed_f9p = {
+    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    version = "0.68.0",
+    default-features = false,
+    optional = true,
+}
+phoxal = {
+    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    version = "=0.68.0",
+    default-features = false,
+    features = ["session"],
+}
+phoxal-project = {
+    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    version = "0.1.0",
+    default-features = false,
+}
+phoxal-robotics = {
+    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    version = "0.1.0",
+}
+phoxal-motion = {
+    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    version = "0.1.0",
+}
+phoxal-port = {
+    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    version = "0.1.0",
+}
+prost = "0.14.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10.9"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "signal", "sync", "net"] }
+thiserror = "2.0.18"
+
+# Source and executable integrity checks must remain practical in debug builds.
+[profile.dev.package.sha2]
+opt-level = 3

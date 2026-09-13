@@ -1,0 +1,4 @@
+/target/
+/.codex/
+/.idea/
+__pycache__/
