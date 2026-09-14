@@ -2,3 +2,11 @@
 /.codex/
 /.idea/
 __pycache__/
+
+# Local-only maintainer files. R0 plan §"R0": the maintainer pins a toolchain
+# locally for development; the end user should not need it. The .local-mujoco
+# shim wraps the macOS framework layout so mujoco-rs can find `libmujoco.dylib`
+# on a host without pkg-config; production/CI uses pkg-config + system MuJoCo.
+/rust-toolchain.toml
+/.local-mujoco/
+/.cargo/config.local.toml
