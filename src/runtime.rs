@@ -120,6 +120,7 @@ pub(super) async fn run(
             run_id,
             requested_steps,
             presentation: options.presentation,
+            auto_run: options.auto_run,
         },
         desktop,
     )
@@ -146,6 +147,7 @@ struct RunRequest<'a> {
     run_id: &'a str,
     requested_steps: u64,
     presentation: Presentation,
+    auto_run: bool,
 }
 
 async fn execute_remote_run(
@@ -160,6 +162,7 @@ async fn execute_remote_run(
         run_id,
         requested_steps,
         presentation,
+        auto_run,
     } = request;
     let executions = supervisor
         .management()
@@ -194,12 +197,33 @@ async fn execute_remote_run(
     )
     .await
     .map_err(|error| error.to_string())?;
-    if let Err(error) =
-        crate::execution::drive(&mut run, &viewport_model, requested_steps, desktop).await
+    let snapshots = match crate::execution::drive(
+        &mut run,
+        &viewport_model,
+        requested_steps,
+        desktop,
+        auto_run,
+    )
+    .await
     {
-        run.mark_application_lost();
-        return Err(error);
-    }
+        Ok(snapshots) => snapshots,
+        Err(error) => {
+            run.mark_application_lost();
+            return Err(error);
+        }
+    };
+    let joint_name = format!("{}__base_freejoint", bundle.manifest.robot_id);
+    let joint = viewport_model
+        .joint(&joint_name)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("composed robot has no root joint `{joint_name}`"))?;
+    let joint = viewport_model
+        .joint_info(joint)
+        .map_err(|error| error.to_string())?;
+    let native_body = snapshots
+        .iter()
+        .map(|snapshot| native_body_sample(snapshot, joint))
+        .collect::<Result<Vec<_>, _>>()?;
     let provenance = run.provenance().clone();
     let completed_steps = run.boundary();
     let timeline_id = run
@@ -227,6 +251,49 @@ async fn execute_remote_run(
         quantum_ns,
         execution_id: execution.execution_id.clone(),
         timeline_id,
+        native_body,
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct NativeBodySample {
+    pub(super) boundary: u64,
+    pub(super) position_m: [f64; 3],
+    pub(super) orientation_wxyz: [f64; 4],
+    pub(super) linear_velocity_mps: [f64; 3],
+    pub(super) angular_velocity_radps: [f64; 3],
+}
+
+fn native_body_sample(
+    snapshot: &phoxal_mujoco::StateSnapshot,
+    joint: phoxal_mujoco::JointInfo,
+) -> Result<NativeBodySample, String> {
+    let position_m = snapshot
+        .qpos()
+        .get(joint.qpos_offset..joint.qpos_offset + 3)
+        .and_then(|values| values.try_into().ok())
+        .ok_or_else(|| "root free joint position is outside qpos".to_owned())?;
+    let orientation_wxyz = snapshot
+        .qpos()
+        .get(joint.qpos_offset + 3..joint.qpos_offset + 7)
+        .and_then(|values| values.try_into().ok())
+        .ok_or_else(|| "root free joint orientation is outside qpos".to_owned())?;
+    let linear_velocity_mps = snapshot
+        .qvel()
+        .get(joint.dof_offset..joint.dof_offset + 3)
+        .and_then(|values| values.try_into().ok())
+        .ok_or_else(|| "root free joint linear velocity is outside qvel".to_owned())?;
+    let angular_velocity_radps = snapshot
+        .qvel()
+        .get(joint.dof_offset + 3..joint.dof_offset + 6)
+        .and_then(|values| values.try_into().ok())
+        .ok_or_else(|| "root free joint angular velocity is outside qvel".to_owned())?;
+    Ok(NativeBodySample {
+        boundary: snapshot.boundary(),
+        position_m,
+        orientation_wxyz,
+        linear_velocity_mps,
+        angular_velocity_radps,
     })
 }
 
@@ -244,4 +311,5 @@ pub(super) struct TerminalEvidence {
     pub(super) quantum_ns: u64,
     pub(super) execution_id: String,
     pub(super) timeline_id: String,
+    pub(super) native_body: Vec<NativeBodySample>,
 }

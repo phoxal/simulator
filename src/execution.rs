@@ -7,7 +7,7 @@ use crate::{
     remote::{RemoteSceneError, RemoteSceneRun},
 };
 use phoxal::session::Simulation;
-use phoxal_mujoco::{Model, Workspace};
+use phoxal_mujoco::{Model, StateSnapshot, Workspace};
 use std::{
     sync::mpsc::TryRecvError,
     time::{Duration, Instant},
@@ -20,8 +20,10 @@ pub(super) async fn drive(
     model: &Model,
     requested_steps: u64,
     desktop: Option<Worker>,
-) -> Result<(), String> {
-    let mut running = desktop.is_none();
+    auto_run: bool,
+) -> Result<Vec<StateSnapshot>, String> {
+    let mut running = desktop.is_none() || auto_run;
+    let mut snapshots = vec![run.state().clone()];
     let mut viewport = if desktop.is_some() {
         Some(Workspace::new(model).map_err(|e| e.to_string())?)
     } else {
@@ -81,6 +83,9 @@ pub(super) async fn drive(
         }
         if (running || single_step) && run.boundary() < requested_steps {
             step(run).await?;
+            if run.boundary().is_multiple_of(10) || run.boundary() == requested_steps {
+                snapshots.push(run.state().clone());
+            }
             frame_due = true;
         }
         if last_renewal.elapsed() >= Duration::from_millis(500) {
@@ -142,7 +147,7 @@ pub(super) async fn drive(
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
-    Ok(())
+    Ok(snapshots)
 }
 
 async fn step(run: &mut Run) -> Result<(), String> {

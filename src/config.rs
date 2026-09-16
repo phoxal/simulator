@@ -25,6 +25,7 @@ pub(super) struct Options {
     pub(super) supervisor_id: Option<String>,
     pub(super) run_id: Option<String>,
     pub(super) bound: Option<Bound>,
+    pub(super) auto_run: bool,
 }
 
 impl Bound {
@@ -71,6 +72,7 @@ impl Options {
         let mut supervisor_id = None;
         let mut run_id = None;
         let mut bound = None;
+        let mut auto_run = false;
         let mut args = args.peekable();
         while let Some(argument) = args.next() {
             let argument = argument
@@ -94,6 +96,12 @@ impl Options {
                         return Err("--json may be specified once".to_owned());
                     }
                     json = true;
+                }
+                "--auto-run" => {
+                    if auto_run {
+                        return Err("--auto-run may be specified once".to_owned());
+                    }
+                    auto_run = true;
                 }
                 "--headless" => {
                     if presentation
@@ -192,6 +200,7 @@ impl Options {
                 || supervisor_id.is_some()
                 || run_id.is_some()
                 || bound.is_some()
+                || auto_run
             {
                 return Err(
                     "probe accepts model facts only; remove run identity and finite-bound options"
@@ -231,6 +240,7 @@ impl Options {
             supervisor_id,
             run_id,
             bound,
+            auto_run,
         })
     }
 }
