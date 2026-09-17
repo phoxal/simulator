@@ -82,10 +82,10 @@ fn component_encoder_reads_native_joint_and_applies_velocity() {
     assert_eq!(sample.position_rad, Some(0.0));
     assert_eq!(sample.velocity_radps, Some(0.0));
 
-    let setpoint = phoxal_motion::ActuatorSetpoint {
-        targets: vec![phoxal_motion::ActuatorTarget {
+    let setpoint = phoxal_service_motion::ActuatorSetpoint {
+        targets: vec![phoxal_service_motion::ActuatorTarget {
             actuator_id: "wheel__motor".to_owned(),
-            control: Some(phoxal_motion::actuator_target::Control::VelocityRadps(3.0)),
+            control: Some(phoxal_service_motion::actuator_target::Control::VelocityRadps(3.0)),
         }],
     };
     let controls = provider
@@ -94,7 +94,7 @@ fn component_encoder_reads_native_joint_and_applies_velocity() {
             &[Actuation {
                 membership: Some(ProductMembership {
                     producer: "motion".to_owned(),
-                    port: phoxal_motion::ports::ACTUATORS.name().to_owned(),
+                    port: phoxal_service_motion::ports::ACTUATORS.name().to_owned(),
                     ..ProductMembership::default()
                 }),
                 valid_until_ns: 2_000_000,

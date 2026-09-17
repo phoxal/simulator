@@ -52,7 +52,7 @@ pub struct ActuationDeclaration {
     /// Service instance owning the output.
     pub service_instance: String,
     /// Generated motion output port.  The convenience constructor fills this
-    /// from `phoxal_motion::ports::ACTUATORS`.
+    /// from `phoxal_service_motion::ports::ACTUATORS`.
     pub port: String,
     /// Generated motion payload FQN.
     pub payload_fqn: String,
@@ -69,8 +69,8 @@ impl ActuationDeclaration {
     ) -> Self {
         Self {
             service_instance: service_instance.into(),
-            port: phoxal_motion::ports::ACTUATORS.name().to_owned(),
-            payload_fqn: phoxal_motion::ports::ACTUATORS
+            port: phoxal_service_motion::ports::ACTUATORS.name().to_owned(),
+            payload_fqn: phoxal_service_motion::ports::ACTUATORS
                 .signature()
                 .response
                 .to_owned(),

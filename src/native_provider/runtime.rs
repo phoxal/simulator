@@ -286,7 +286,7 @@ impl NativeProvider for ComponentProvider {
         model: &Model,
         actuation: &[Actuation],
     ) -> Result<Vec<f64>, Self::Error> {
-        let expected_fqn = phoxal_motion::ActuatorSetpoint::full_name();
+        let expected_fqn = phoxal_service_motion::ActuatorSetpoint::full_name();
         if actuation.len() != self.actuations.len() {
             return Err(NativeProviderError::InvalidActuation(format!(
                 "actuation cut has {}, expected {} configured outputs",
@@ -341,7 +341,7 @@ impl NativeProvider for ComponentProvider {
                     binding.binding.payload_fqn()
                 )));
             }
-            let setpoint = phoxal_motion::ActuatorSetpoint::decode(item.payload.as_slice())?;
+            let setpoint = phoxal_service_motion::ActuatorSetpoint::decode(item.payload.as_slice())?;
             setpoint
                 .validate_for(binding.targets.iter().map(|target| target.wire_id.as_str()))
                 .map_err(|error| NativeProviderError::InvalidActuation(error.to_string()))?;
@@ -365,11 +365,11 @@ impl NativeProvider for ComponentProvider {
                 let value = match (target.mode, control) {
                     (
                         NativeControlMode::Torque,
-                        phoxal_motion::actuator_target::Control::TorqueNm(value),
+                        phoxal_service_motion::actuator_target::Control::TorqueNm(value),
                     )
                     | (
                         NativeControlMode::Velocity,
-                        phoxal_motion::actuator_target::Control::VelocityRadps(value),
+                        phoxal_service_motion::actuator_target::Control::VelocityRadps(value),
                     ) => *value,
                     (NativeControlMode::Torque, _) => {
                         return Err(NativeProviderError::InvalidActuation(format!(

@@ -417,16 +417,16 @@ pub(super) fn bind_actuation(
     model: &Model,
     config: &ActuationDeclaration,
 ) -> Result<(BoundActuation, NativeActuationBindingFact), NativeProviderError> {
-    let port = phoxal_motion::ports::ACTUATORS;
+    let port = phoxal_service_motion::ports::ACTUATORS;
     if config.port != port.name()
-        || config.payload_fqn != phoxal_motion::ActuatorSetpoint::full_name()
+        || config.payload_fqn != phoxal_service_motion::ActuatorSetpoint::full_name()
     {
         return Err(NativeProviderError::InvalidActuation(format!(
             "actuation binding {}/{} must use generated motion port {} with payload {}",
             config.service_instance,
             config.port,
             port.name(),
-            phoxal_motion::ActuatorSetpoint::full_name()
+            phoxal_service_motion::ActuatorSetpoint::full_name()
         )));
     }
     validate_text(&config.service_instance, "motion service instance")?;

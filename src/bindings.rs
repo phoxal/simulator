@@ -232,7 +232,7 @@ pub(super) fn generated_actuation_facts(
                 capability_target = capability.target.id
             );
             model
-                .bind_actuator(phoxal_motion::ports::ACTUATORS, &native_name)
+                .bind_actuator(phoxal_service_motion::ports::ACTUATORS, &native_name)
                 .map_err(|error| format!("actuator binding {native_name}: {error}"))?;
             targets.push(format!("{instance}.{capability_name}"));
         }
@@ -271,8 +271,8 @@ pub(super) fn generated_actuation_facts(
                     executable.instance, port
                 )
             })?;
-            if port != phoxal_motion::ports::ACTUATORS.name()
-                || signature.response != phoxal_motion::ActuatorSetpoint::full_name()
+            if port != phoxal_service_motion::ports::ACTUATORS.name()
+                || signature.response != phoxal_service_motion::ActuatorSetpoint::full_name()
             {
                 // Intermediate service intents are ordinary graph traffic.
                 // Only native actuator products belong in the physics input cut.
@@ -333,8 +333,8 @@ pub(super) fn build_provider(
         .actuation_bindings
         .iter()
         .map(|binding| {
-            if binding.port != phoxal_motion::ports::ACTUATORS.name()
-                || binding.payload_fqn != phoxal_motion::ActuatorSetpoint::full_name()
+            if binding.port != phoxal_service_motion::ports::ACTUATORS.name()
+                || binding.payload_fqn != phoxal_service_motion::ActuatorSetpoint::full_name()
             {
                 return Err(format!(
                     "simulation actuation {}/{} does not use generated motion constants",
@@ -369,7 +369,7 @@ pub(super) fn build_provider(
                         capability.target.id
                     );
                     let native = model
-                        .bind_actuator(phoxal_motion::ports::ACTUATORS, &native_name)
+                        .bind_actuator(phoxal_service_motion::ports::ACTUATORS, &native_name)
                         .map_err(|error| format!("actuator binding {actuator_id}: {error}"))?;
                     let mode = match native.info.mode {
                         phoxal_mujoco::ActuatorMode::Torque => NativeControlMode::Torque,
