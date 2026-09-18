@@ -3,7 +3,7 @@
 #![cfg(feature = "native")]
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use phoxal::port::PortDescriptor;
 use phoxal_component_bno085 as bno085_contract;
@@ -13,6 +13,40 @@ use phoxal_component_vl53l1x as vl53l1x_contract;
 use phoxal_component_zed_f9p as zed_contract;
 use crate::mujoco::{Model, Scene};
 use phoxal_service_motion as motion_contract;
+
+/// Resolve the framework root used by every test in this module.
+///
+/// The tests must read assets from the framework revision the simulator's
+/// lockfile pins, not from a sibling checkout that happens to exist on the
+/// developer's machine. CI passes `PHOXAL_TEST_FRAMEWORK_ROOT` after checking
+/// out the pinned framework commit and verifying its identity.
+///
+/// Local development can also pass the variable explicitly; the previous
+/// guessed `CARGO_MANIFEST_DIR/../../framework` heuristic is rejected because
+/// it silently points to whatever happens to live at that filesystem
+/// location, which is not an asset pin.
+fn framework_root() -> PathBuf {
+    let raw = std::env::var_os("PHOXAL_TEST_FRAMEWORK_ROOT")
+        .unwrap_or_else(|| panic!(
+            "PHOXAL_TEST_FRAMEWORK_ROOT must be set to the framework root whose \
+             identity matches the simulator lockfile; pass it from CI after \
+             checking out the pinned revision, or set it locally to the same \
+             framework checkout the simulator depends on."
+        ));
+    let path = PathBuf::from(raw);
+    if !path.join("components").is_dir() {
+        panic!(
+            "PHOXAL_TEST_FRAMEWORK_ROOT={} does not contain a `components` directory; \
+             pass the framework repo root, not a subdirectory",
+            path.display()
+        );
+    }
+    path
+}
+
+fn components_root() -> PathBuf {
+    framework_root().join("components")
+}
 
 fn assert_sensor_binding<P: PortDescriptor>(model: &Model, port: P, native_sensor: &str) {
     let binding = model
@@ -63,7 +97,7 @@ fn assert_actuator_binding<P: PortDescriptor>(model: &Model, port: P, native_act
 
 #[test]
 fn official_component_models_compile_from_their_closed_directories() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../framework/components");
+    let components = components_root();
     for component in ["bno085", "ddsm115", "oak_d_lite", "vl53l1x", "zed_f9p"] {
         let root = components.join(component);
         let model = Model::from_file(root.join("model.xml"))
@@ -78,7 +112,7 @@ fn official_component_models_compile_from_their_closed_directories() {
 
 #[test]
 fn component_models_leave_the_scene_physics_quantum_to_composition() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../framework/components");
+    let components = components_root();
     let mut timesteps = Vec::new();
 
     for component in ["bno085", "ddsm115", "oak_d_lite", "vl53l1x", "zed_f9p"] {
@@ -107,7 +141,7 @@ fn component_models_leave_the_scene_physics_quantum_to_composition() {
 
 #[test]
 fn official_models_keep_capability_targets_and_native_signal_names() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../framework/components");
+    let components = components_root();
 
     let bno085 = Model::from_file(components.join("bno085/model.xml")).expect("BNO085 model");
     assert!(bno085.body("sensor_link").unwrap().is_some());
@@ -249,7 +283,7 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
 
 #[test]
 fn native_bindings_fail_closed_for_wrong_kinds_and_missing_objects() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../framework/components");
+    let components = components_root();
     let bno085 = Model::from_file(components.join("bno085/model.xml")).expect("BNO085 model");
 
     let wrong_kind = bno085
@@ -277,7 +311,7 @@ fn native_bindings_fail_closed_for_wrong_kinds_and_missing_objects() {
 
 #[test]
 fn native_bindings_read_only_from_their_own_model_snapshot() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../framework/components");
+    let components = components_root();
 
     let bno085 = Model::from_file(components.join("bno085/model.xml")).expect("BNO085 model");
     let bno085_snapshot = Scene::new(bno085.clone())
