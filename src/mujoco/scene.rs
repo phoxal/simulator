@@ -18,7 +18,9 @@ use rendering::RendererState;
 pub use rendering::{RenderedCamera, ViewCamera};
 
 use crate::mujoco::error::{SceneError, WorkspaceError};
-use crate::mujoco::model::{Model, SiteHandle};
+use crate::mujoco::model::Model;
+#[cfg(any(test, feature = "rendering"))]
+use crate::mujoco::model::SiteHandle;
 
 const TIME_TOLERANCE: f64 = 1.0e-9;
 
@@ -304,6 +306,7 @@ impl Workspace {
     /// nearest hit inside the inclusive range limits is returned.  The query
     /// mutates only MuJoCo's scratch data used by ray casting and is intended
     /// for a non-authoritative observation workspace.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn finite_fov_range(
         &mut self,
         site: SiteHandle,

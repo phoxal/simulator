@@ -15,18 +15,22 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+#[cfg(feature = "rendering")]
 use crate::authority::{
     AuthorityClient, AuthorityClientError, AuthorityState, SimulationTransport,
 };
 use phoxal::communication::session::PortKind;
 use phoxal::communication::simulation::{
-    Actuation, Observation, PhaseStatus, ProductDisposition, ProgressResponse,
-    ReleaseAuthorityResponse,
+    Actuation, Observation, ProductDisposition,
 };
+#[cfg(feature = "rendering")]
+use phoxal::communication::simulation::{PhaseStatus, ProgressResponse, ReleaseAuthorityResponse};
 use sha2::{Digest, Sha256};
 
 #[cfg(feature = "native")]
-use crate::mujoco::{Model, PhysicsQuantum, Scene, SceneError, StateSnapshot};
+use crate::mujoco::{Model, PhysicsQuantum, StateSnapshot};
+#[cfg(feature = "rendering")]
+use crate::mujoco::{Scene, SceneError};
 
 const MAX_PROVIDER_REQUIREMENTS: usize = 256;
 const MAX_PROVIDER_ID_BYTES: usize = 64;
@@ -650,7 +654,7 @@ pub struct AppliedActuation {
 }
 
 /// A public-authority/native-scene coordination failure.
-#[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 #[derive(Debug)]
 pub enum RemoteSceneError<TE: fmt::Display, PE> {
     /// Public-session authority lifecycle failure.
@@ -665,7 +669,7 @@ pub enum RemoteSceneError<TE: fmt::Display, PE> {
     Provenance(ProvenanceError),
 }
 
-#[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 impl<TE: fmt::Display, PE: fmt::Display> fmt::Display for RemoteSceneError<TE, PE> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -680,14 +684,14 @@ impl<TE: fmt::Display, PE: fmt::Display> fmt::Display for RemoteSceneError<TE, P
     }
 }
 
-#[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 impl<TE: fmt::Debug + fmt::Display, PE: fmt::Debug + fmt::Display> std::error::Error
     for RemoteSceneError<TE, PE>
 {
 }
 
 /// The one native MuJoCo scene coordinated through a public simulation session.
-#[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 pub struct RemoteSceneRun<T, P>
 where
     T: SimulationTransport,
@@ -702,7 +706,7 @@ where
     generation: u64,
 }
 
-#[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 impl<T, P> fmt::Debug for RemoteSceneRun<T, P>
 where
     T: SimulationTransport,
@@ -719,7 +723,7 @@ where
     }
 }
 
-#[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 impl<T, P> RemoteSceneRun<T, P>
 where
     T: SimulationTransport,
@@ -1148,6 +1152,7 @@ fn validate_binding_set(bindings: &[ActuationBinding]) -> Result<(), ActuationBi
 }
 
 #[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 pub(crate) fn validate_bindings_for_model(
     model: &Model,
     bindings: &[ActuationBinding],

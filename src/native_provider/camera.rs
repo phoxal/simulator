@@ -1,3 +1,4 @@
+#[cfg(feature = "rendering")]
 use super::observations::encode_observation;
 use crate::remote::NativeProviderError;
 use crate::remote::ProviderSet;
@@ -7,6 +8,7 @@ use crate::mujoco::CameraBinding;
 use crate::mujoco::StateSnapshot;
 use crate::mujoco::Workspace;
 use phoxal::port::PortSignature;
+#[cfg(feature = "rendering")]
 use prost::Message;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -15,6 +17,7 @@ pub(super) enum CameraEncoding {
     Rgb8,
 }
 
+#[cfg(feature = "rendering")]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn encode_camera_observation(
     providers: &ProviderSet,
@@ -91,6 +94,26 @@ pub(super) fn encode_camera_observation(
     )
 }
 
+#[cfg(not(feature = "rendering"))]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn encode_camera_observation(
+    _providers: &ProviderSet,
+    service_instance: &str,
+    signature: PortSignature,
+    _binding: &CameraBinding,
+    _render_workspace: Option<&mut Workspace>,
+    _state: &StateSnapshot,
+    _quantum_ns: u64,
+    _encoding: CameraEncoding,
+) -> Result<Observation, NativeProviderError> {
+    Err(NativeProviderError::Unsupported(format!(
+        "provider {service_instance}/{} camera observations require the `rendering` feature; \
+         rebuild with `--features native,rendering` to exercise this provider",
+        signature.name
+    )))
+}
+
+#[cfg(feature = "rendering")]
 pub(super) fn encode_depth_observation(
     providers: &ProviderSet,
     service_instance: &str,
@@ -152,6 +175,24 @@ pub(super) fn encode_depth_observation(
         quantum_ns,
         frame.encode_to_vec(),
     )
+}
+
+#[cfg(not(feature = "rendering"))]
+pub(super) fn encode_depth_observation(
+    _providers: &ProviderSet,
+    service_instance: &str,
+    _binding: &CameraBinding,
+    _render_workspace: Option<&mut Workspace>,
+    _state: &StateSnapshot,
+    _quantum_ns: u64,
+    _range_m: [f64; 2],
+) -> Result<Observation, NativeProviderError> {
+    Err(NativeProviderError::Unsupported(format!(
+        "provider {service_instance}/{} {} observations require the `rendering` feature; \
+         rebuild with `--features native,rendering` to exercise this provider",
+        service_instance,
+        oak_contract::ports::DEPTH.name()
+    )))
 }
 
 pub(super) fn rgb_to_mono8(rgb: &[u8]) -> Result<Vec<u8>, NativeProviderError> {

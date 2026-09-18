@@ -18,29 +18,34 @@ mod error;
 mod composition;
 #[cfg(feature = "native")]
 mod model;
-#[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 mod provider;
 #[cfg(feature = "native")]
 mod scene;
 
-pub use artifact::{ClosedModel, Resource, ResourceLimits};
-pub use error::ArtifactError;
+pub use artifact::{ClosedModel, Resource};
 
 #[cfg(feature = "native")]
-pub use composition::{
-    ComponentAttachment, CompositionError, ModelComposition, NAMESPACE_SEPARATOR, SceneComposition,
-    compose_model, compose_scene, unique_direct_root_body,
+pub use composition::{ComponentAttachment, SceneComposition, unique_direct_root_body};
+#[cfg(any(test, feature = "rendering"))]
+pub use composition::{CompositionError, ModelComposition, NAMESPACE_SEPARATOR, compose_model, compose_scene};
+#[cfg(feature = "native")]
+pub use error::ModelError;
+#[cfg(feature = "rendering")]
+pub use error::{SceneError, WorkspaceError};
+#[cfg(feature = "native")]
+pub use model::{Model, ModelIdentity};
+#[cfg(feature = "native")]
+pub(crate) use model::{
+    ActuatorBinding, ActuatorHandle, ActuatorInfo, ActuatorMode, CameraBinding, JointKind,
+    SensorBinding, SensorKind, SiteBinding,
 };
-#[cfg(feature = "native")]
-pub use error::{ModelError, SceneError, WorkspaceError};
-#[cfg(feature = "native")]
+#[cfg(any(test, feature = "rendering"))]
 pub use model::{
-    ActuatorBinding, ActuatorHandle, ActuatorInfo, ActuatorMode, BodyHandle, BodyInfo,
-    CameraBinding, CameraHandle, CameraInfo, JointHandle, JointInfo, JointKind, Model, ModelCounts,
-    ModelHandle, ModelIdentity, ObjectKind, SensorBinding, SensorHandle, SensorInfo, SensorKind,
-    SiteBinding, SiteHandle, SiteInfo,
+    BodyHandle, BodyInfo, CameraHandle, CameraInfo, JointHandle, JointInfo, ModelCounts,
+    ModelHandle, ObjectKind, SensorHandle, SensorInfo, SiteHandle, SiteInfo,
 };
-#[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 pub use provider::{
     ActuatorSelection, Boundary, ControlledError, ControlledPhase, ControlledScene, ControlledStep,
     ExecutionId, HoldProvider, ObservationReceipt, PrepareRequest, ProviderReset,
@@ -51,7 +56,9 @@ pub use scene::RenderedCamera;
 #[cfg(feature = "rendering")]
 pub use scene::ViewCamera;
 #[cfg(feature = "native")]
-pub use scene::{PhysicsQuantum, Scene, ScenePhase, SceneStep, StateSnapshot, Workspace};
+pub use scene::{PhysicsQuantum, StateSnapshot, Workspace};
+#[cfg(feature = "rendering")]
+pub use scene::{Scene, ScenePhase, SceneStep};
 
 #[cfg(test)]
 #[cfg(feature = "native")]

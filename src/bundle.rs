@@ -26,6 +26,7 @@ pub(super) struct BundleFacts {
     pub(super) root: PathBuf,
     pub(super) manifest: BundleManifest,
     pub(super) provenance: BundleProvenance,
+    #[cfg(feature = "rendering")]
     pub(super) simulation: Option<BundleSimulation>,
 }
 
@@ -58,11 +59,13 @@ impl BundleFacts {
                 provenance.source_tree.path
             ));
         }
+        #[cfg(feature = "rendering")]
         let simulation = manifest.simulation.clone();
         let facts = Self {
             root,
             manifest,
             provenance,
+            #[cfg(feature = "rendering")]
             simulation,
         };
         facts.validate_source_tree()?;

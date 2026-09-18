@@ -1,28 +1,34 @@
 use crate::bundle::BundleFacts;
 use crate::composition::native_component_prefix;
+#[cfg(feature = "rendering")]
 use crate::georeference::georeference;
-use crate::native_provider::ActuationDeclaration;
-use crate::native_provider::ActuatorTarget;
 use crate::native_provider::Cadence;
-use crate::native_provider::ComponentProvider;
-use crate::native_provider::NativeControlMode;
-use crate::native_provider::ObservationBinding;
+#[cfg(feature = "rendering")]
 use crate::remote::ProviderSet;
+#[cfg(feature = "rendering")]
 use crate::remote::SIMULATION_PROTOCOL;
+#[cfg(feature = "rendering")]
 use crate::remote::quantum_nanoseconds;
+#[cfg(feature = "rendering")]
 use phoxal::communication::simulation::ProviderRequirement;
 use crate::mujoco::Model;
+#[cfg(feature = "rendering")]
 use crate::mujoco::PhysicsQuantum;
 use phoxal_artifact_format::artifact::OutputKind;
 use phoxal_artifact_format::artifact::PortKind;
+#[cfg(feature = "rendering")]
 use phoxal_artifact_format::bundle::BundleActuationBinding;
+#[cfg(feature = "rendering")]
 use phoxal_artifact_format::bundle::BundleSimulation;
+#[cfg(feature = "rendering")]
 use phoxal_artifact_format::bundle::BundleSimulationProvider;
 use phoxal_artifact_format::document::CapabilityDeclaration;
 use phoxal_artifact_format::document::NativeTargetKind;
 use prost::Name;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "rendering")]
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 pub(super) struct ProbeContract {
     pub(super) providers: Vec<ProbeProvider>,
@@ -68,40 +74,43 @@ pub(super) fn output_observation_kind(kind: OutputKind) -> Option<PortKind> {
 pub(super) fn probe_contract(bundle: &BundleFacts, model: &Model) -> Result<ProbeContract, String> {
     let providers = generated_provider_facts(bundle)?;
     let actuation_bindings = generated_actuation_facts(bundle, model)?;
-    let simulation = BundleSimulation {
-        protocol: SIMULATION_PROTOCOL.to_owned(),
-        mode: "controlled".to_owned(),
-        model_identity: model.identity().to_hex(),
-        quantum_ns: quantum_nanoseconds(
-            PhysicsQuantum::from_seconds(model.timestep()).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?,
-        providers: providers
-            .iter()
-            .map(|provider| BundleSimulationProvider {
-                rate_microhertz: provider.rate_microhertz,
-                service_instance: provider.service_instance.clone(),
-                port: provider.port.clone(),
-                kind: provider.kind,
-                input_fqn: provider.input_fqn.clone(),
-                payload_fqn: provider.payload_fqn.clone(),
-                service_fqn: String::new(),
-                method: String::new(),
-                max_message_bytes: 0,
-                max_buffered_items: 0,
-            })
-            .collect(),
-        actuation_bindings: actuation_bindings
-            .iter()
-            .map(|binding| BundleActuationBinding {
-                service_instance: binding.service_instance.clone(),
-                port: binding.port.clone(),
-                payload_fqn: binding.payload_fqn.clone(),
-                actuator_ids: binding.actuator_ids.clone(),
-            })
-            .collect(),
-    };
-    let _provider = build_provider(bundle, model, &simulation)?;
+    #[cfg(feature = "rendering")]
+    {
+        let simulation = BundleSimulation {
+            protocol: SIMULATION_PROTOCOL.to_owned(),
+            mode: "controlled".to_owned(),
+            model_identity: model.identity().to_hex(),
+            quantum_ns: quantum_nanoseconds(
+                PhysicsQuantum::from_seconds(model.timestep()).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?,
+            providers: providers
+                .iter()
+                .map(|provider| BundleSimulationProvider {
+                    rate_microhertz: provider.rate_microhertz,
+                    service_instance: provider.service_instance.clone(),
+                    port: provider.port.clone(),
+                    kind: provider.kind,
+                    input_fqn: provider.input_fqn.clone(),
+                    payload_fqn: provider.payload_fqn.clone(),
+                    service_fqn: String::new(),
+                    method: String::new(),
+                    max_message_bytes: 0,
+                    max_buffered_items: 0,
+                })
+                .collect(),
+            actuation_bindings: actuation_bindings
+                .iter()
+                .map(|binding| BundleActuationBinding {
+                    service_instance: binding.service_instance.clone(),
+                    port: binding.port.clone(),
+                    payload_fqn: binding.payload_fqn.clone(),
+                    actuator_ids: binding.actuator_ids.clone(),
+                })
+                .collect(),
+        };
+        let _provider = build_provider(bundle, model, &simulation)?;
+    }
     Ok(ProbeContract {
         providers,
         actuation_bindings,
@@ -300,6 +309,7 @@ pub(super) fn generated_actuation_facts(
     Ok(outputs)
 }
 
+#[cfg(feature = "rendering")]
 pub(super) fn build_provider(
     bundle: &BundleFacts,
     model: &Model,
@@ -430,6 +440,7 @@ pub(super) fn build_provider(
         .map_err(|error| error.to_string())
 }
 
+#[cfg(feature = "rendering")]
 pub(super) fn observation_bindings(
     bundle: &BundleFacts,
     model: &Model,
@@ -649,6 +660,7 @@ pub(super) fn observation_bindings(
     Ok(bindings)
 }
 
+#[cfg(feature = "rendering")]
 pub(super) fn capability_signal(
     capability: &CapabilityDeclaration,
     role: &str,
@@ -679,6 +691,7 @@ pub(super) fn semantic_number(
     Ok(value)
 }
 
+#[cfg(feature = "rendering")]
 fn validate_camera_capability(
     capability: &CapabilityDeclaration,
     model: &Model,

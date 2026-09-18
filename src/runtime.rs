@@ -1,22 +1,65 @@
 use crate::bindings::ProbeFacts;
+#[cfg(feature = "rendering")]
 use crate::bindings::build_provider;
 use crate::bindings::probe_contract;
 use crate::bundle::BundleFacts;
 use crate::composition::load_composed_model;
 use crate::config::Options;
+#[cfg(feature = "rendering")]
 use crate::config::Presentation;
+#[cfg(feature = "rendering")]
 use crate::native_provider::ComponentProvider;
+#[cfg(feature = "rendering")]
 use crate::remote::ProvenanceInput;
+#[cfg(feature = "rendering")]
 use crate::remote::RemoteSceneRun;
+#[cfg(feature = "rendering")]
 use crate::remote::SIMULATION_PROTOCOL;
 use crate::remote::quantum_nanoseconds;
+#[cfg(feature = "rendering")]
 use crate::mujoco::Model;
 use crate::mujoco::PhysicsQuantum;
+#[cfg(feature = "rendering")]
 use crate::mujoco::Scene;
+#[cfg(feature = "rendering")]
 use serde::Serialize;
 
+/// Probe a composed model bundle and emit stable machine-readable facts.
+///
+/// `probe` is intentionally rendering-independent: it only inspects the
+/// authored model and bundle, so it is compiled with `--features native` and
+/// is the only operation a headless native-only build exposes.
+pub(super) async fn probe(options: Options) -> Result<(), String> {
+    let bundle = BundleFacts::load(&options.bundle)?;
+    let model = load_composed_model(&options.scene, &bundle)?;
+    let quantum_ns = quantum_nanoseconds(
+        PhysicsQuantum::from_seconds(model.timestep()).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if !options.json {
+        return Err(
+            "a probe requires --json so its facts have one stable machine-readable shape"
+                .to_owned(),
+        );
+    }
+    let contract = probe_contract(&bundle, &model)?;
+    let facts = ProbeFacts {
+        model_identity: model.identity().to_hex(),
+        quantum_ns,
+        providers: contract.providers,
+        actuation_bindings: contract.actuation_bindings,
+    };
+    println!(
+        "{}",
+        serde_json::to_string(&facts).map_err(|error| error.to_string())?
+    );
+    Ok(())
+}
+
+#[cfg(feature = "rendering")]
 pub(super) const CONTROL_PRINCIPAL: &str = "simulator";
 
+#[cfg(feature = "rendering")]
 pub(super) async fn run(
     options: Options,
     desktop: Option<crate::desktop::Worker>,
@@ -27,27 +70,6 @@ pub(super) async fn run(
         PhysicsQuantum::from_seconds(model.timestep()).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-
-    if options.probe {
-        if !options.json {
-            return Err(
-                "a probe requires --json so its facts have one stable machine-readable shape"
-                    .to_owned(),
-            );
-        }
-        let contract = probe_contract(&bundle, &model)?;
-        let facts = ProbeFacts {
-            model_identity: model.identity().to_hex(),
-            quantum_ns,
-            providers: contract.providers,
-            actuation_bindings: contract.actuation_bindings,
-        };
-        println!(
-            "{}",
-            serde_json::to_string(&facts).map_err(|error| error.to_string())?
-        );
-        return Ok(());
-    }
 
     let simulation = bundle
         .simulation
@@ -143,6 +165,7 @@ pub(super) async fn run(
     }
 }
 
+#[cfg(feature = "rendering")]
 struct RunRequest<'a> {
     run_id: &'a str,
     requested_steps: u64,
@@ -150,6 +173,7 @@ struct RunRequest<'a> {
     auto_run: bool,
 }
 
+#[cfg(feature = "rendering")]
 async fn execute_remote_run(
     supervisor: &phoxal::session::Supervisor,
     bundle: &BundleFacts,
@@ -255,6 +279,7 @@ async fn execute_remote_run(
     })
 }
 
+#[cfg(feature = "rendering")]
 #[derive(Debug, Serialize)]
 pub(super) struct NativeBodySample {
     pub(super) boundary: u64,
@@ -264,6 +289,7 @@ pub(super) struct NativeBodySample {
     pub(super) angular_velocity_radps: [f64; 3],
 }
 
+#[cfg(feature = "rendering")]
 fn native_body_sample(
     snapshot: &crate::mujoco::StateSnapshot,
     joint: crate::mujoco::JointInfo,
@@ -297,6 +323,7 @@ fn native_body_sample(
     })
 }
 
+#[cfg(feature = "rendering")]
 #[derive(Debug, Serialize)]
 pub(super) struct TerminalEvidence {
     pub(super) native_bindings: serde_json::Value,

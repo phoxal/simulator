@@ -40,7 +40,7 @@ pub fn packet(
 }
 
 /// Encode one model-backed joint as the shared robotics encoder sample.
-#[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 pub fn encode_encoder_observation(
     providers: &ProviderSet,
     service_instance: &str,
