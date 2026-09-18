@@ -20,76 +20,63 @@ required-features = ["native"]
 
 [features]
 default = ["native"]
+# The native feature is intentionally opt-in so hardware projects and the
+# generic framework can compile without a MuJoCo installation or rendering
+# stack. The simulator binary requires `native` and builds it by default.
 native = [
-    "dep:phoxal-mujoco",
     "dep:phoxal-component-bno085",
     "dep:phoxal-component-ddsm115",
     "dep:phoxal-component-oak_d_lite",
     "dep:phoxal-component-vl53l1x",
     "dep:phoxal-component-zed_f9p",
-    "phoxal-mujoco/native",
-    "phoxal-mujoco/rendering",
+    "dep:mujoco-rs",
 ]
+# Offscreen RGB/depth capture is an application-owned capability. It remains
+# separate from the read-only native model/physics feature so consumers that
+# do not need rendered products do not acquire a GL stack.
+rendering = ["native", "dep:cgl", "dep:glutin"]
+
 [dependencies]
-eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
-phoxal-mujoco = {
-    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
-    version = "0.1.0",
-    default-features = false,
-    optional = true,
-}
+# Component contracts this simulator knows how to compose into native scenes.
 phoxal-component-bno085 = {
-    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
     version = "0.68.0",
     default-features = false,
     optional = true,
 }
 phoxal-component-ddsm115 = {
-    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
     version = "0.68.0",
     default-features = false,
     optional = true,
 }
 phoxal-component-oak_d_lite = {
-    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
     version = "0.68.0",
     default-features = false,
     optional = true,
 }
 phoxal-component-vl53l1x = {
-    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
     version = "0.68.0",
     default-features = false,
     optional = true,
 }
 phoxal-component-zed_f9p = {
-    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
     version = "0.68.0",
     default-features = false,
     optional = true,
 }
 phoxal = {
-    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
     version = "=0.68.0",
     default-features = false,
-    features = ["session"],
-}
-phoxal-project = {
-    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
-    version = "0.1.0",
-    default-features = false,
-}
-phoxal-robotics = {
-    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
-    version = "0.1.0",
+    features = ["session", "port"],
 }
 phoxal-service-motion = {
-    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
+    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
     version = "0.68.0",
-}
-phoxal-port = {
-    git = "https://github.com/phoxal/framework.git", rev = "ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5",
-    version = "0.1.0",
 }
 prost = "0.14.4"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -97,6 +84,15 @@ serde_json = "1.0.149"
 sha2 = "0.10.9"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "signal", "sync", "net"] }
 thiserror = "2.0.18"
+# `mujoco-rs` 6.0.1 is the binding release for MuJoCo 3.12.0.
+mujoco-rs = { version = "=6.0.1", optional = true, default-features = false }
+eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cgl = { version = "0.3.2", optional = true }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+glutin = { version = "0.32.3", default-features = false, features = ["egl"], optional = true }
 
 # Source and executable integrity checks must remain practical in debug builds.
 [profile.dev.package.sha2]

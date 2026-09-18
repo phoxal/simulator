@@ -10,9 +10,9 @@ use crate::remote::ProvenanceInput;
 use crate::remote::RemoteSceneRun;
 use crate::remote::SIMULATION_PROTOCOL;
 use crate::remote::quantum_nanoseconds;
-use phoxal_mujoco::Model;
-use phoxal_mujoco::PhysicsQuantum;
-use phoxal_mujoco::Scene;
+use crate::mujoco::Model;
+use crate::mujoco::PhysicsQuantum;
+use crate::mujoco::Scene;
 use serde::Serialize;
 
 pub(super) const CONTROL_PRINCIPAL: &str = "simulator";
@@ -265,8 +265,8 @@ pub(super) struct NativeBodySample {
 }
 
 fn native_body_sample(
-    snapshot: &phoxal_mujoco::StateSnapshot,
-    joint: phoxal_mujoco::JointInfo,
+    snapshot: &crate::mujoco::StateSnapshot,
+    joint: crate::mujoco::JointInfo,
 ) -> Result<NativeBodySample, String> {
     let position_m = snapshot
         .qpos()

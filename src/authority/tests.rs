@@ -418,7 +418,7 @@ async fn lost_preparation_and_observation_replies_never_integrate_twice() {
         },
         remote::{ProvenanceInput, RemoteSceneRun},
     };
-    use phoxal_mujoco::{Model, Scene};
+    use crate::mujoco::{Model, Scene};
     for lost in [PhaseStatus::Prepared, PhaseStatus::ObservationsAdmitted] {
         let model = Model::from_xml(include_str!("../../tests/fixtures/motor.xml")).unwrap();
         let provider = ComponentProvider::new(

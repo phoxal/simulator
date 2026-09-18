@@ -1,10 +1,10 @@
 use crate::bundle::BundleFacts;
 use crate::bundle::regular_file;
-use phoxal_mujoco::ClosedModel;
-use phoxal_mujoco::ComponentAttachment;
-use phoxal_mujoco::Model;
-use phoxal_mujoco::SceneComposition;
-use phoxal_mujoco::unique_direct_root_body;
+use crate::mujoco::ClosedModel;
+use crate::mujoco::ComponentAttachment;
+use crate::mujoco::Model;
+use crate::mujoco::SceneComposition;
+use crate::mujoco::unique_direct_root_body;
 use std::path::Path;
 
 pub(super) const COMPONENT_NAMESPACE_SEPARATOR: &str = "__";

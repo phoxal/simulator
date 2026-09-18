@@ -11,8 +11,8 @@ use crate::remote::ProviderSet;
 use crate::remote::SIMULATION_PROTOCOL;
 use crate::remote::quantum_nanoseconds;
 use phoxal::communication::simulation::ProviderRequirement;
-use phoxal_mujoco::Model;
-use phoxal_mujoco::PhysicsQuantum;
+use crate::mujoco::Model;
+use crate::mujoco::PhysicsQuantum;
 use phoxal_project::BundleActuationBinding;
 use phoxal_project::BundleSimulation;
 use phoxal_project::BundleSimulationProvider;
@@ -372,9 +372,9 @@ pub(super) fn build_provider(
                         .bind_actuator(phoxal_service_motion::ports::ACTUATORS, &native_name)
                         .map_err(|error| format!("actuator binding {actuator_id}: {error}"))?;
                     let mode = match native.info.mode {
-                        phoxal_mujoco::ActuatorMode::Torque => NativeControlMode::Torque,
-                        phoxal_mujoco::ActuatorMode::Velocity => NativeControlMode::Velocity,
-                        phoxal_mujoco::ActuatorMode::Unsupported => {
+                        crate::mujoco::ActuatorMode::Torque => NativeControlMode::Torque,
+                        crate::mujoco::ActuatorMode::Velocity => NativeControlMode::Velocity,
+                        crate::mujoco::ActuatorMode::Unsupported => {
                             return Err(format!(
                                 "actuator {actuator_id} has unsupported native control semantics"
                             ));

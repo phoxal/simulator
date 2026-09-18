@@ -10,12 +10,12 @@ use phoxal_component_ddsm115 as ddsm115_contract;
 use phoxal_component_oak_d_lite as oak_contract;
 use phoxal_component_vl53l1x as vl53l1x_contract;
 use phoxal_component_zed_f9p as zed_contract;
-use phoxal_mujoco::ActuatorBinding;
-use phoxal_mujoco::ActuatorMode;
-use phoxal_mujoco::Model;
-use phoxal_mujoco::SensorBinding;
-use phoxal_mujoco::SensorKind;
-use phoxal_port::PortSignature;
+use crate::mujoco::ActuatorBinding;
+use crate::mujoco::ActuatorMode;
+use crate::mujoco::Model;
+use crate::mujoco::SensorBinding;
+use crate::mujoco::SensorKind;
+use phoxal::port::PortSignature;
 use prost::Name;
 use std::collections::BTreeSet;
 
@@ -162,7 +162,7 @@ pub(super) fn bind_observation(
                 ))
             })?;
             let info = model.joint_info(joint)?;
-            if info.kind != phoxal_mujoco::JointKind::Hinge {
+            if info.kind != crate::mujoco::JointKind::Hinge {
                 return Err(NativeProviderError::Unsupported(format!(
                     "DDSM115 encoder joint {joint_id:?} is not a scalar hinge"
                 )));
@@ -579,16 +579,16 @@ pub(super) fn validate_text(value: &str, field: &str) -> Result<(), NativeProvid
     Ok(())
 }
 
-pub(super) fn wire_kind(kind: phoxal_port::PortKind) -> phoxal::communication::session::PortKind {
+pub(super) fn wire_kind(kind: phoxal::port::PortKind) -> phoxal::communication::session::PortKind {
     use phoxal::communication::session::PortKind as Wire;
     match kind {
-        phoxal_port::PortKind::State => Wire::State,
-        phoxal_port::PortKind::Sample => Wire::Sample,
-        phoxal_port::PortKind::Event => Wire::Event,
-        phoxal_port::PortKind::Stream => Wire::Stream,
-        phoxal_port::PortKind::Setpoint => Wire::Setpoint,
-        phoxal_port::PortKind::Read => Wire::Read,
-        phoxal_port::PortKind::Commands => Wire::Commands,
+        phoxal::port::PortKind::State => Wire::State,
+        phoxal::port::PortKind::Sample => Wire::Sample,
+        phoxal::port::PortKind::Event => Wire::Event,
+        phoxal::port::PortKind::Stream => Wire::Stream,
+        phoxal::port::PortKind::Setpoint => Wire::Setpoint,
+        phoxal::port::PortKind::Read => Wire::Read,
+        phoxal::port::PortKind::Commands => Wire::Commands,
         _ => Wire::Unspecified,
     }
 }

@@ -1,5 +1,5 @@
 use crate::native_provider::Georeference;
-use phoxal_mujoco::Model;
+use crate::mujoco::Model;
 
 pub(super) const GEOREFERENCE_NUMERIC: &str = "phoxal_georeference";
 

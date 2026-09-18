@@ -11,7 +11,7 @@ use super::runtime::ComponentProvider;
 use crate::remote::ProviderSet;
 use phoxal::communication::simulation::ProductMembership;
 use phoxal_component_ddsm115 as ddsm115_contract;
-use phoxal_mujoco::Model;
+use crate::mujoco::Model;
 
 use std::path::Path;
 
@@ -24,7 +24,7 @@ fn ddsm115_model() -> Model {
         .expect("native encoder fixture")
 }
 
-fn provider_requirement<P: phoxal_port::PortDescriptor>(
+fn provider_requirement<P: phoxal::port::PortDescriptor>(
     service_instance: &str,
     port: P,
 ) -> ProviderRequirement {
@@ -71,7 +71,7 @@ fn component_encoder_reads_native_joint_and_applies_velocity() {
     assert_eq!(provider.observation_facts.len(), 1);
     assert_eq!(provider.actuation_facts.len(), 1);
 
-    let scene = phoxal_mujoco::Scene::new(model.clone()).expect("native scene");
+    let scene = crate::mujoco::Scene::new(model.clone()).expect("native scene");
     let state = scene.snapshot().expect("initial native state");
     let observations = provider
         .observations(&model, &state, 2_000_000)

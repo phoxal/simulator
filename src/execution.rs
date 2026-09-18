@@ -7,7 +7,7 @@ use crate::{
     remote::{RemoteSceneError, RemoteSceneRun},
 };
 use phoxal::session::Simulation;
-use phoxal_mujoco::{Model, StateSnapshot, Workspace};
+use crate::mujoco::{Model, StateSnapshot, Workspace};
 use std::{
     sync::mpsc::TryRecvError,
     time::{Duration, Instant},

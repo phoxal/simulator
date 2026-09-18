@@ -1,5 +1,5 @@
 use eframe::egui;
-use phoxal_mujoco::ViewCamera;
+use crate::mujoco::ViewCamera;
 
 pub(super) fn show(
     ui: &mut egui::Ui,

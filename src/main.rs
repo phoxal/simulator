@@ -7,6 +7,7 @@ mod config;
 mod desktop;
 mod execution;
 mod georeference;
+mod mujoco;
 mod native_provider;
 mod observations;
 mod remote;

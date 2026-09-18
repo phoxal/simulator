@@ -1,6 +1,6 @@
 use super::*;
 use phoxal_component_bno085 as imu;
-use phoxal_mujoco::Workspace;
+use crate::mujoco::Workspace;
 use std::collections::BTreeMap;
 
 fn model(xml: &str) -> Model {

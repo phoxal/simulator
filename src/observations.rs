@@ -4,7 +4,7 @@ use phoxal::communication::{
     session::PortKind,
     simulation::{Observation, ProductDisposition, ProductMembership},
 };
-use phoxal_mujoco::{Model, StateSnapshot};
+use crate::mujoco::{Model, StateSnapshot};
 use prost::{Message, Name};
 use sha2::{Digest, Sha256};
 
@@ -58,7 +58,7 @@ pub fn encode_encoder_observation(
     let kind = PortKind::try_from(requirement.kind)
         .map_err(|_| NativeProviderError::InvalidPayload("provider kind is unknown".to_owned()))?;
     if kind != PortKind::Sample
-        || requirement.payload_fqn != phoxal_robotics::EncoderSample::full_name()
+        || requirement.payload_fqn != phoxal::robotics::EncoderSample::full_name()
     {
         return Err(NativeProviderError::InvalidPayload(
             "encoder observation does not match the generated robotics sample contract".to_owned(),
@@ -68,7 +68,7 @@ pub fn encode_encoder_observation(
         NativeProviderError::InvalidPayload(format!("model has no joint named {joint_id}"))
     })?;
     let info = model.joint_info(handle)?;
-    let sample = phoxal_robotics::EncoderSample {
+    let sample = phoxal::robotics::EncoderSample {
         position_rad: Some(state.qpos().get(info.qpos_offset).copied().ok_or_else(|| {
             NativeProviderError::InvalidPayload(format!(
                 "joint {joint_id} qpos offset is outside the state"

@@ -1,5 +1,5 @@
-use phoxal_mujoco::ClosedModel;
-use phoxal_mujoco::Resource;
+use crate::mujoco::ClosedModel;
+use crate::mujoco::Resource;
 use phoxal_project::BundleComponent;
 use phoxal_project::BundleManifest;
 use phoxal_project::BundleProvenance;

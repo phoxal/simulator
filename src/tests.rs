@@ -1,6 +1,6 @@
 use crate::config::{Bound, Options, Presentation};
 use crate::georeference::georeference;
-use phoxal_mujoco::Model;
+use crate::mujoco::Model;
 use std::ffi::OsString;
 
 fn parse(arguments: &[&str]) -> Result<Options, String> {

@@ -26,7 +26,7 @@ use phoxal::communication::simulation::{
 use sha2::{Digest, Sha256};
 
 #[cfg(feature = "native")]
-use phoxal_mujoco::{Model, PhysicsQuantum, Scene, SceneError, StateSnapshot};
+use crate::mujoco::{Model, PhysicsQuantum, Scene, SceneError, StateSnapshot};
 
 const MAX_PROVIDER_REQUIREMENTS: usize = 256;
 const MAX_PROVIDER_ID_BYTES: usize = 64;
@@ -493,7 +493,7 @@ pub trait NativeProvider {
 pub enum NativeProviderError {
     /// A model-local native binding could not be resolved.
     #[error("native model binding failed: {0}")]
-    Model(#[from] phoxal_mujoco::ModelError),
+    Model(#[from] crate::mujoco::ModelError),
     /// A Protobuf payload could not be decoded.
     #[error("typed provider payload could not be decoded: {0}")]
     Decode(#[from] prost::DecodeError),

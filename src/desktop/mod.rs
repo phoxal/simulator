@@ -4,7 +4,7 @@ mod viewport;
 
 use crate::config::Options;
 use eframe::egui;
-use phoxal_mujoco::{RenderedCamera, ViewCamera};
+use crate::mujoco::{RenderedCamera, ViewCamera};
 use std::sync::{
     Arc, Mutex,
     mpsc::{self, Receiver, SyncSender},

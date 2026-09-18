@@ -3,10 +3,10 @@ use crate::remote::NativeProviderError;
 use crate::remote::ProviderSet;
 use phoxal::communication::simulation::Observation;
 use phoxal_component_oak_d_lite as oak_contract;
-use phoxal_mujoco::CameraBinding;
-use phoxal_mujoco::StateSnapshot;
-use phoxal_mujoco::Workspace;
-use phoxal_port::PortSignature;
+use crate::mujoco::CameraBinding;
+use crate::mujoco::StateSnapshot;
+use crate::mujoco::Workspace;
+use phoxal::port::PortSignature;
 use prost::Message;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

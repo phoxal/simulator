@@ -11,13 +11,13 @@ use phoxal_component_ddsm115 as ddsm115_contract;
 use phoxal_component_oak_d_lite as oak_contract;
 use phoxal_component_vl53l1x as vl53l1x_contract;
 use phoxal_component_zed_f9p as zed_contract;
-use phoxal_mujoco::CameraBinding;
-use phoxal_mujoco::Model;
-use phoxal_mujoco::SensorBinding;
-use phoxal_mujoco::SiteBinding;
-use phoxal_mujoco::StateSnapshot;
-use phoxal_mujoco::Workspace;
-use phoxal_port::PortSignature;
+use crate::mujoco::CameraBinding;
+use crate::mujoco::Model;
+use crate::mujoco::SensorBinding;
+use crate::mujoco::SiteBinding;
+use crate::mujoco::StateSnapshot;
+use crate::mujoco::Workspace;
+use phoxal::port::PortSignature;
 use prost::Message;
 
 #[derive(Clone, Debug)]
