@@ -52,3 +52,7 @@ pub use scene::RenderedCamera;
 pub use scene::ViewCamera;
 #[cfg(feature = "native")]
 pub use scene::{PhysicsQuantum, Scene, ScenePhase, SceneStep, StateSnapshot, Workspace};
+
+#[cfg(test)]
+#[cfg(feature = "native")]
+mod tests;

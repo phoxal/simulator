@@ -63,7 +63,7 @@ fn assert_actuator_binding<P: PortDescriptor>(model: &Model, port: P, native_act
 
 #[test]
 fn official_component_models_compile_from_their_closed_directories() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../framework/components");
+    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../framework/components");
     for component in ["bno085", "ddsm115", "oak_d_lite", "vl53l1x", "zed_f9p"] {
         let root = components.join(component);
         let model = Model::from_file(root.join("model.xml"))
@@ -78,7 +78,7 @@ fn official_component_models_compile_from_their_closed_directories() {
 
 #[test]
 fn component_models_leave_the_scene_physics_quantum_to_composition() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../framework/components");
+    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../framework/components");
     let mut timesteps = Vec::new();
 
     for component in ["bno085", "ddsm115", "oak_d_lite", "vl53l1x", "zed_f9p"] {
@@ -107,7 +107,7 @@ fn component_models_leave_the_scene_physics_quantum_to_composition() {
 
 #[test]
 fn official_models_keep_capability_targets_and_native_signal_names() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../framework/components");
+    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../framework/components");
 
     let bno085 = Model::from_file(components.join("bno085/model.xml")).expect("BNO085 model");
     assert!(bno085.body("sensor_link").unwrap().is_some());
@@ -249,7 +249,7 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
 
 #[test]
 fn native_bindings_fail_closed_for_wrong_kinds_and_missing_objects() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../framework/components");
+    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../framework/components");
     let bno085 = Model::from_file(components.join("bno085/model.xml")).expect("BNO085 model");
 
     let wrong_kind = bno085
@@ -277,7 +277,7 @@ fn native_bindings_fail_closed_for_wrong_kinds_and_missing_objects() {
 
 #[test]
 fn native_bindings_read_only_from_their_own_model_snapshot() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../framework/components");
+    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../framework/components");
 
     let bno085 = Model::from_file(components.join("bno085/model.xml")).expect("BNO085 model");
     let bno085_snapshot = Scene::new(bno085.clone())

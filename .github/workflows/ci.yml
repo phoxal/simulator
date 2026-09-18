@@ -1,0 +1,115 @@
+name: simulator-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-discovery:
+    name: list native and rendering tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libmujoco3.12.0
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: enumerate native test identities
+        run: |
+          set -euo pipefail
+          cargo test --locked --features native -- --list --format terse > /tmp/native-tests.txt
+          cat /tmp/native-tests.txt
+          count=$(grep -c '^project::\|component_models\|rendering' /tmp/native-tests.txt || true)
+          echo "::notice title=native-test-count::$count test identities enumerated"
+          test "$count" -gt 0
+      - name: enumerate rendering test identities
+        run: |
+          set -euo pipefail
+          cargo test --locked --features native,rendering -- --list --format terse > /tmp/rendering-tests.txt
+          cat /tmp/rendering-tests.txt
+          count=$(grep -c '^project::\|component_models\|rendering' /tmp/rendering-tests.txt || true)
+          echo "::notice title=rendering-test-count::$count test identities enumerated"
+          test "$count" -gt 0
+
+  test-run-native:
+    name: execute native tests
+    needs: test-discovery
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libmujoco3.12.0
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: run native tests
+        run: |
+          set -euo pipefail
+          cargo test --locked --features native --no-fail-fast -- --test-threads=1
+
+  test-run-rendering:
+    name: execute rendering tests
+    needs: test-discovery
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libmujoco3.12.0 libegl1 libgl1
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: run rendering tests
+        run: |
+          set -euo pipefail
+          cargo test --locked --features native,rendering --no-fail-fast -- --test-threads=1
+
+  fmt-check:
+    name: cargo fmt --check
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: fmt check
+        run: cargo fmt --all -- --check
+
+  policy-check:
+    name: xtask policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: policy
+        run: cargo xtask policy
