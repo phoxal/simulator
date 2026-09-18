@@ -238,6 +238,7 @@ impl Workspace {
     }
 
     /// Replaces the generalized positions used by this private workspace.
+    #[cfg(feature = "rendering")]
     pub fn set_qpos(&mut self, values: &[f64]) -> Result<(), WorkspaceError> {
         let expected = self.model.counts().qpos;
         validate_state_values("qpos", values, expected)?;
@@ -246,6 +247,7 @@ impl Workspace {
     }
 
     /// Replaces the generalized velocities used by this private workspace.
+    #[cfg(feature = "rendering")]
     pub fn set_qvel(&mut self, values: &[f64]) -> Result<(), WorkspaceError> {
         let expected = self.model.counts().qvel;
         validate_state_values("qvel", values, expected)?;
@@ -254,6 +256,7 @@ impl Workspace {
     }
 
     /// Replaces scalar controls used by this private workspace.
+    #[cfg(feature = "rendering")]
     pub fn set_controls(&mut self, values: &[f64]) -> Result<(), WorkspaceError> {
         let expected = self.model.counts().controls;
         validate_state_values("controls", values, expected)?;
@@ -564,6 +567,7 @@ impl Scene {
     ///
     /// Controls are validated as finite values and against the model's native
     /// finite control range before any data mutation occurs.
+    #[cfg(feature = "rendering")]
     pub fn set_control(&mut self, index: usize, value: f64) -> Result<(), SceneError> {
         if self.phase == ScenePhase::Failed {
             return Err(SceneError::Failed);
@@ -583,6 +587,7 @@ impl Scene {
     }
 
     /// Selects all scalar controls for the next native transition atomically.
+    #[cfg(feature = "rendering")]
     pub fn set_controls(&mut self, values: &[f64]) -> Result<(), SceneError> {
         if self.phase == ScenePhase::Failed {
             return Err(SceneError::Failed);
@@ -603,6 +608,7 @@ impl Scene {
     }
 
     /// Performs exactly one native transition.
+    #[cfg(feature = "rendering")]
     pub fn step(&mut self) -> Result<SceneStep, SceneError> {
         self.advance(1)
     }
@@ -612,6 +618,7 @@ impl Scene {
     /// This is crate-visible so the controlled provider coordinator can place
     /// its admission boundary immediately before native mutation while direct
     /// callers continue to use [`Scene::step`] or [`Scene::advance`].
+    #[cfg(feature = "rendering")]
     pub(crate) fn integrate_controls(&mut self, controls: &[f64]) -> Result<SceneStep, SceneError> {
         if self.phase == ScenePhase::Failed {
             return Err(SceneError::Failed);
@@ -681,6 +688,7 @@ impl Scene {
 
     /// Performs exactly `count` native transitions, including every intermediate
     /// state update and boundary check.
+    #[cfg(feature = "rendering")]
     pub fn advance(&mut self, count: u64) -> Result<SceneStep, SceneError> {
         if count == 0 {
             return Err(SceneError::ZeroAdvance);

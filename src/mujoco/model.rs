@@ -4,9 +4,17 @@ use std::ffi::{CStr, CString};
 use std::fmt;
 use std::sync::Arc;
 
-use mujoco_rs::prelude::{MjModel, MjtBias, MjtGain, MjtJoint, MjtObj, MjtSensor, MjtTrn};
+use mujoco_rs::prelude::{MjModel, MjtObj};
+#[cfg(feature = "native")]
+use mujoco_rs::prelude::{MjtBias, MjtGain, MjtTrn};
+#[cfg(any(test, feature = "rendering"))]
+use mujoco_rs::prelude::{MjtJoint, MjtSensor};
 use mujoco_rs::wrappers::MjVfs;
-use phoxal::port::{PortDescriptor, PortKind, PortSignature};
+use phoxal::port::PortSignature;
+#[cfg(feature = "native")]
+use phoxal::port::PortDescriptor;
+#[cfg(feature = "native")]
+use phoxal::port::PortKind;
 
 use crate::mujoco::artifact::ClosedModel;
 use crate::mujoco::error::ModelError;
@@ -112,6 +120,7 @@ impl Model {
 
     /// Returns the compiled model table sizes.
     #[must_use]
+    #[cfg(feature = "native")]
     pub fn counts(&self) -> ModelCounts {
         ModelCounts {
             qpos: self.inner.nq() as usize,
@@ -128,26 +137,31 @@ impl Model {
     }
 
     /// Looks up a body by its model-local name.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn body(&self, name: &str) -> Result<Option<BodyHandle>, ModelError> {
         Ok(self.find(name, ObjectKind::Body)?.map(BodyHandle))
     }
 
     /// Looks up a joint by its model-local name.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn joint(&self, name: &str) -> Result<Option<JointHandle>, ModelError> {
         Ok(self.find(name, ObjectKind::Joint)?.map(JointHandle))
     }
 
     /// Looks up a site by its model-local name.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn site(&self, name: &str) -> Result<Option<SiteHandle>, ModelError> {
         Ok(self.find(name, ObjectKind::Site)?.map(SiteHandle))
     }
 
     /// Looks up an actuator by its model-local name.
+    #[cfg(feature = "native")]
     pub fn actuator(&self, name: &str) -> Result<Option<ActuatorHandle>, ModelError> {
         Ok(self.find(name, ObjectKind::Actuator)?.map(ActuatorHandle))
     }
 
     /// Looks up a sensor by its model-local name.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn sensor(&self, name: &str) -> Result<Option<SensorHandle>, ModelError> {
         Ok(self.find(name, ObjectKind::Sensor)?.map(SensorHandle))
     }
@@ -158,6 +172,7 @@ impl Model {
     /// handle and static range identify the model-local native source. The
     /// caller chooses the explicit native name from the component model; no
     /// name or sensor semantics are inferred from the port string.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn bind_sensor<P: PortDescriptor>(
         &self,
         port: P,
@@ -175,6 +190,7 @@ impl Model {
     }
 
     /// Binds a generated sample port to one model-authored native camera.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn bind_camera<P: PortDescriptor>(
         &self,
         port: P,
@@ -196,6 +212,7 @@ impl Model {
     /// Sites are used for capabilities whose native output is derived from a
     /// physical frame, such as GNSS antenna position or a finite-FOV range
     /// query, rather than a direct MuJoCo sensor table.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn bind_site<P: PortDescriptor>(
         &self,
         port: P,
@@ -218,6 +235,7 @@ impl Model {
     /// runtime. The compiled graph supplies its generated producer descriptor
     /// and this explicit binding only associates that descriptor with native
     /// actuation.
+    #[cfg(feature = "native")]
     pub fn bind_actuator<P: PortDescriptor>(
         &self,
         port: P,
@@ -235,11 +253,13 @@ impl Model {
     }
 
     /// Looks up a model-authored camera by its model-local name.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn camera(&self, name: &str) -> Result<Option<CameraHandle>, ModelError> {
         Ok(self.find(name, ObjectKind::Camera)?.map(CameraHandle))
     }
 
     /// Returns static model data for a body.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn body_info(&self, handle: BodyHandle) -> Result<BodyInfo, ModelError> {
         let index = self.check_handle(handle.0, ObjectKind::Body, self.inner.nbody() as usize)?;
         Ok(BodyInfo {
@@ -251,6 +271,7 @@ impl Model {
     }
 
     /// Returns static model data for a joint.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn joint_info(&self, handle: JointHandle) -> Result<JointInfo, ModelError> {
         let index = self.check_handle(handle.0, ObjectKind::Joint, self.inner.njnt() as usize)?;
         let limits = self.inner.jnt_limited()[index].then(|| self.inner.jnt_range()[index]);
@@ -265,6 +286,7 @@ impl Model {
     }
 
     /// Returns static model data for a site.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn site_info(&self, handle: SiteHandle) -> Result<SiteInfo, ModelError> {
         let index = self.check_handle(handle.0, ObjectKind::Site, self.inner.nsite() as usize)?;
         Ok(SiteInfo {
@@ -276,6 +298,7 @@ impl Model {
     }
 
     /// Returns static model data for an actuator.
+    #[cfg(feature = "native")]
     pub fn actuator_info(&self, handle: ActuatorHandle) -> Result<ActuatorInfo, ModelError> {
         let index = self.check_handle(
             handle.0,
@@ -306,6 +329,7 @@ impl Model {
     }
 
     /// Returns static model data for a sensor's contiguous output range.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn sensor_info(&self, handle: SensorHandle) -> Result<SensorInfo, ModelError> {
         let index =
             self.check_handle(handle.0, ObjectKind::Sensor, self.inner.nsensor() as usize)?;
@@ -320,6 +344,7 @@ impl Model {
     }
 
     /// Returns static model data for a camera.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn camera_info(&self, handle: CameraHandle) -> Result<CameraInfo, ModelError> {
         let index = self.check_handle(handle.0, ObjectKind::Camera, self.inner.ncam() as usize)?;
         let [width, height] = self.inner.cam_resolution()[index];
@@ -433,7 +458,9 @@ impl Model {
         Arc::clone(&self.inner)
     }
 
+    #[cfg(feature = "native")]
     fn find(&self, name: &str, kind: ObjectKind) -> Result<Option<ModelHandle>, ModelError> {
+
         if CString::new(name).is_err() {
             return Err(ModelError::NameContainsNul);
         }
@@ -447,6 +474,7 @@ impl Model {
             }))
     }
 
+    #[cfg(feature = "native")]
     fn check_handle(
         &self,
         handle: ModelHandle,
@@ -491,6 +519,7 @@ fn invalid_metadata(field: &'static str, index: usize) -> ModelError {
     }
 }
 
+#[cfg(feature = "native")]
 fn binding_signature<P: PortDescriptor>(
     port: P,
     native_kind: &'static str,
@@ -520,6 +549,7 @@ fn missing_binding(
 }
 
 /// Deterministic compiled model table sizes.
+#[cfg(feature = "native")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ModelCounts {
     /// Number of generalized positions.
@@ -569,6 +599,7 @@ impl fmt::Display for ModelIdentity {
 }
 
 /// Kind of one model-local native object.
+#[cfg(feature = "native")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ObjectKind {
     /// A body.
@@ -585,6 +616,7 @@ pub enum ObjectKind {
     Sensor,
 }
 
+#[cfg(feature = "native")]
 impl ObjectKind {
     fn native(self) -> MjtObj {
         match self {
@@ -613,6 +645,7 @@ impl ObjectKind {
 ///
 /// The native index is only meaningful with the exact [`ModelIdentity`] carried
 /// by this handle.
+#[cfg(feature = "native")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ModelHandle {
     identity: ModelIdentity,
@@ -620,6 +653,7 @@ pub struct ModelHandle {
     index: usize,
 }
 
+#[cfg(feature = "native")]
 impl ModelHandle {
     /// Returns the model identity that owns this handle.
     #[must_use]
@@ -640,6 +674,7 @@ impl ModelHandle {
     }
 }
 
+#[cfg(feature = "native")]
 macro_rules! typed_handle {
     ($name:ident, $kind:ident) => {
         #[doc = concat!("A model-scoped ", stringify!($kind), " handle.")]
@@ -668,14 +703,21 @@ macro_rules! typed_handle {
     };
 }
 
+#[cfg(any(test, feature = "rendering"))]
 typed_handle!(BodyHandle, body);
+#[cfg(any(test, feature = "rendering"))]
 typed_handle!(JointHandle, joint);
+#[cfg(any(test, feature = "rendering"))]
 typed_handle!(SiteHandle, site);
+#[cfg(any(test, feature = "rendering"))]
 typed_handle!(CameraHandle, camera);
+#[cfg(feature = "native")]
 typed_handle!(ActuatorHandle, actuator);
+#[cfg(any(test, feature = "rendering"))]
 typed_handle!(SensorHandle, sensor);
 
 /// Supported native joint kinds represented without exposing native pointers.
+#[cfg(any(test, feature = "rendering"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JointKind {
     /// A free six-degree-of-freedom joint.
@@ -688,6 +730,7 @@ pub enum JointKind {
     Hinge,
 }
 
+#[cfg(any(test, feature = "rendering"))]
 impl JointKind {
     fn from_native(kind: MjtJoint) -> Self {
         match kind {
@@ -700,6 +743,7 @@ impl JointKind {
 }
 
 /// Read-only static body facts.
+#[cfg(any(test, feature = "rendering"))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BodyInfo {
     /// Handle for the body.
@@ -713,6 +757,7 @@ pub struct BodyInfo {
 }
 
 /// Read-only static joint facts.
+#[cfg(any(test, feature = "rendering"))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JointInfo {
     /// Handle for the joint.
@@ -730,6 +775,7 @@ pub struct JointInfo {
 }
 
 /// Read-only static site facts.
+#[cfg(any(test, feature = "rendering"))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SiteInfo {
     /// Handle for the site.
@@ -743,6 +789,7 @@ pub struct SiteInfo {
 }
 
 /// Read-only static actuator facts.
+#[cfg(feature = "native")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ActuatorInfo {
     /// Handle for the actuator.
@@ -763,6 +810,7 @@ pub struct ActuatorInfo {
 /// matching mode.  Any authored actuator that does not have one of the
 /// explicitly recognized joint transmission forms is reported as
 /// [`Self::Unsupported`] and must be configured by a narrower native adapter.
+#[cfg(feature = "native")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActuatorMode {
     /// A direct fixed-gain, no-bias joint force/torque actuator.
@@ -773,6 +821,7 @@ pub enum ActuatorMode {
     Unsupported,
 }
 
+#[cfg(feature = "native")]
 impl ActuatorMode {
     fn from_native(
         transmission: MjtTrn,
@@ -805,15 +854,18 @@ impl ActuatorMode {
     }
 }
 
+#[cfg(feature = "native")]
 fn approximately_zero(value: f64) -> bool {
     value.is_finite() && value.abs() <= 1.0e-12
 }
 
+#[cfg(feature = "native")]
 fn approximately_equal(left: f64, right: f64) -> bool {
     left.is_finite() && right.is_finite() && (left - right).abs() <= 1.0e-12
 }
 
 /// Read-only static sensor facts.
+#[cfg(any(test, feature = "rendering"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SensorInfo {
     /// Handle for the sensor.
@@ -831,6 +883,7 @@ pub struct SensorInfo {
 /// The model API retains only the classes needed by the maintained reference
 /// capabilities.  Other MuJoCo sensor classes remain representable through
 /// [`Self::Other`] and cannot be silently substituted for one of these forms.
+#[cfg(any(test, feature = "rendering"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SensorKind {
     /// A frame quaternion, in MuJoCo `[w, x, y, z]` order.
@@ -849,6 +902,7 @@ pub enum SensorKind {
     Other,
 }
 
+#[cfg(any(test, feature = "rendering"))]
 impl SensorKind {
     fn from_native(kind: MjtSensor) -> Self {
         match kind {
@@ -864,6 +918,7 @@ impl SensorKind {
 }
 
 /// A generated sample port bound to a native sensor table range.
+#[cfg(any(test, feature = "rendering"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SensorBinding {
     /// Public generated port identity.
@@ -874,6 +929,7 @@ pub struct SensorBinding {
     pub info: SensorInfo,
 }
 
+#[cfg(any(test, feature = "rendering"))]
 impl SensorBinding {
     /// Reads this binding's native values from a snapshot owned by the same
     /// compiled model.
@@ -900,6 +956,7 @@ impl SensorBinding {
 }
 
 /// A generated sample port bound to a native camera.
+#[cfg(any(test, feature = "rendering"))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CameraBinding {
     /// Public generated port identity.
@@ -911,6 +968,7 @@ pub struct CameraBinding {
 }
 
 /// A generated sample port bound to a native model site.
+#[cfg(any(test, feature = "rendering"))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SiteBinding {
     /// Public generated port identity.
@@ -921,6 +979,7 @@ pub struct SiteBinding {
     pub info: SiteInfo,
 }
 
+#[cfg(any(test, feature = "rendering"))]
 impl SiteBinding {
     /// Reads this binding's post-forward Cartesian position from a snapshot
     /// owned by the same compiled model.
@@ -939,6 +998,7 @@ impl SiteBinding {
 }
 
 /// A generated consuming setpoint bound to a native actuator.
+#[cfg(feature = "native")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ActuatorBinding {
     /// Generated producer/setpoint identity supplied by the compiled graph.
@@ -949,6 +1009,7 @@ pub struct ActuatorBinding {
     pub info: ActuatorInfo,
 }
 
+#[cfg(feature = "native")]
 impl ActuatorBinding {
     /// Reads the selected scalar control from a snapshot owned by the same
     /// compiled model.
@@ -967,6 +1028,7 @@ impl ActuatorBinding {
 }
 
 /// Read-only static camera facts.
+#[cfg(any(test, feature = "rendering"))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CameraInfo {
     /// Handle for the camera.
