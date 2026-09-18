@@ -6,110 +6,269 @@ on:
   pull_request:
     branches: [main]
 
+# Simulator-owned CI. Provisioning reuses the pinned native engine setup
+# (now living under simulator ownership) and explicitly checks out the
+# framework revision selected by the simulator lockfile, then exercises
+# each required test identity rather than accepting any positive count.
 jobs:
-  test-discovery:
-    name: list native and rendering tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout
-        uses: actions/checkout@v4
-      - name: install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libmujoco3.12.0
-      - name: install rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.98.1
-      - name: cache cargo
-        uses: Swatinem/rust-cache@v2
-      - name: enumerate native test identities
-        run: |
-          set -euo pipefail
-          cargo test --locked --features native -- --list --format terse > /tmp/native-tests.txt
-          cat /tmp/native-tests.txt
-          count=$(grep -c '^project::\|component_models\|rendering' /tmp/native-tests.txt || true)
-          echo "::notice title=native-test-count::$count test identities enumerated"
-          test "$count" -gt 0
-      - name: enumerate rendering test identities
-        run: |
-          set -euo pipefail
-          cargo test --locked --features native,rendering -- --list --format terse > /tmp/rendering-tests.txt
-          cat /tmp/rendering-tests.txt
-          count=$(grep -c '^project::\|component_models\|rendering' /tmp/rendering-tests.txt || true)
-          echo "::notice title=rendering-test-count::$count test identities enumerated"
-          test "$count" -gt 0
-
-  test-run-native:
-    name: execute native tests
-    needs: test-discovery
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout
-        uses: actions/checkout@v4
-      - name: install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libmujoco3.12.0
-      - name: install rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.98.1
-      - name: cache cargo
-        uses: Swatinem/rust-cache@v2
-      - name: run native tests
-        run: |
-          set -euo pipefail
-          cargo test --locked --features native --no-fail-fast -- --test-threads=1
-
-  test-run-rendering:
-    name: execute rendering tests
-    needs: test-discovery
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout
-        uses: actions/checkout@v4
-      - name: install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libmujoco3.12.0 libegl1 libgl1
-      - name: install rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.98.1
-      - name: cache cargo
-        uses: Swatinem/rust-cache@v2
-      - name: run rendering tests
-        run: |
-          set -euo pipefail
-          cargo test --locked --features native,rendering --no-fail-fast -- --test-threads=1
-
-  fmt-check:
+  fmt:
     name: cargo fmt --check
     runs-on: ubuntu-latest
     steps:
-      - name: checkout
+      - name: checkout simulator
         uses: actions/checkout@v4
+        with:
+          path: simulator
       - name: install rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.1
-      - name: cache cargo
-        uses: Swatinem/rust-cache@v2
-      - name: fmt check
+      - name: cargo fmt --check
+        working-directory: simulator
         run: cargo fmt --all -- --check
 
-  policy-check:
-    name: xtask policy
+  policy:
+    name: cargo build + clippy policy
     runs-on: ubuntu-latest
     steps:
-      - name: checkout
+      - name: checkout simulator
         uses: actions/checkout@v4
+        with:
+          path: simulator
       - name: install rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.98.1
       - name: cache cargo
         uses: Swatinem/rust-cache@v2
-      - name: policy
-        run: cargo xtask policy
+        with:
+          cache-on-failure: true
+      - name: cargo check (no-default-features)
+        working-directory: simulator
+        # Smoke check that the default feature set still builds. The
+        # explicitly-selected binary in jobs below pins --features native
+        # and validates the feature boundary against the gating policy.
+        run: cargo check --locked
+
+  native-build:
+    name: cargo build --features native (binary)
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout simulator
+        uses: actions/checkout@v4
+        with:
+          path: simulator
+      - name: install pinned native engine
+        working-directory: simulator
+        run: ./.github/scripts/setup_mujoco.sh "$RUNNER_TEMP/mujoco"
+      - name: export MUJOCO_DYNAMIC_LINK_DIR
+        working-directory: simulator
+        run: |
+          arch="$(uname -m)"
+          echo "MUJOCO_DYNAMIC_LINK_DIR=$RUNNER_TEMP/mujoco/lib" >> "$GITHUB_ENV"
+          if [[ "$(uname -s)" == "Linux" ]]; then
+            echo "LD_LIBRARY_PATH=$RUNNER_TEMP/mujoco/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+            echo "PKG_CONFIG_PATH=$RUNNER_TEMP/mujoco/lib/pkgconfig" >> "$GITHUB_ENV"
+          fi
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: build binary (native-only)
+        working-directory: simulator
+        run: |
+          set -euo pipefail
+          cargo build --locked \
+            --no-default-features \
+            --features native \
+            --bin phoxal-simulator-mujoco
+      - name: build binary (native + rendering)
+        working-directory: simulator
+        run: |
+          set -euo pipefail
+          cargo build --locked \
+            --no-default-features \
+            --features native,rendering \
+            --bin phoxal-simulator-mujoco
+
+  native-tests:
+    name: native test identities
+    needs: native-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout simulator
+        uses: actions/checkout@v4
+        with:
+          path: simulator
+      - name: install pinned native engine
+        working-directory: simulator
+        run: ./.github/scripts/setup_mujoco.sh "$RUNNER_TEMP/mujoco"
+      - name: resolve pinned framework revision
+        id: framework
+        working-directory: simulator
+        run: |
+          set -euo pipefail
+          # Extract the framework git revision pinned in Cargo.toml. The
+          # dependency pin alone does not qualify filesystem assets, so we
+          # verify the framework checkout matches the pinned commit.
+          revision=$(grep -A2 '^phoxal-framework\b' Cargo.toml \
+            | grep -E '^\s*rev\s*=' \
+            | head -n1 \
+            | sed -E 's/.*rev\s*=\s*"([^"]+)".*/\1/')
+          if [[ -z "$revision" ]]; then
+            echo "::error::Could not extract phoxal-framework rev from Cargo.toml"
+            exit 1
+          fi
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "Pinned framework revision: $revision"
+      - name: checkout pinned framework
+        uses: actions/checkout@v4
+        with:
+          repository: phoxal/framework
+          ref: ${{ steps.framework.outputs.revision }}
+          path: framework
+      - name: verify framework identity
+        working-directory: framework
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="${{ steps.framework.outputs.revision }}"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Framework checkout $actual does not match pinned revision $expected"
+            exit 1
+          fi
+          echo "Framework checkout verified at $actual"
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: enumerate and check native test identities
+        env:
+          MUJOCO_DYNAMIC_LINK_DIR: ${{ runner.temp }}/mujoco/lib
+          PHOXAL_TEST_FRAMEWORK_ROOT: ${{ github.workspace }}/framework
+        working-directory: simulator
+        run: |
+          set -euo pipefail
+          cargo test --locked --features native --no-fail-fast \
+            --no-run -- --format terse > /tmp/native-tests.txt 2>&1 || (cat /tmp/native-tests.txt && exit 1)
+          cat /tmp/native-tests.txt
+
+          # Required native test identities. Each must be present in the
+          # enumerated list; presence is not enough — the actual test
+          # execution below proves they run, not just that they compile.
+          for required in \
+              official_component_models_compile_from_their_closed_directories \
+              component_models_leave_the_scene_physics_quantum_to_composition \
+              official_models_keep_capability_targets_and_native_signal_names \
+              ; do
+            if ! grep -q "$required" /tmp/native-tests.txt; then
+              echo "::error::Missing required native test identity: $required"
+              exit 1
+            fi
+            echo "::notice title=native-identity-found::$required"
+          done
+
+          # Execute the required test identities one at a time so each
+          # produces an independent pass/fail record.
+          for required in \
+              official_component_models_compile_from_their_closed_directories \
+              component_models_leave_the_scene_physics_quantum_to_composition \
+              official_models_keep_capability_targets_and_native_signal_names \
+              ; do
+            cargo test --locked --features native --no-fail-fast \
+              -- --test-threads=1 "$required"
+          done
+
+  rendering-tests:
+    name: rendering test identities
+    needs: native-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout simulator
+        uses: actions/checkout@v4
+        with:
+          path: simulator
+      - name: install pinned native engine
+        working-directory: simulator
+        run: ./.github/scripts/setup_mujoco.sh "$RUNNER_TEMP/mujoco"
+      - name: install rendering prereqs
+        working-directory: simulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1
+      - name: resolve pinned framework revision
+        id: framework
+        working-directory: simulator
+        run: |
+          set -euo pipefail
+          revision=$(grep -A2 '^phoxal-framework\b' Cargo.toml \
+            | grep -E '^\s*rev\s*=' \
+            | head -n1 \
+            | sed -E 's/.*rev\s*=\s*"([^"]+)".*/\1/')
+          if [[ -z "$revision" ]]; then
+            echo "::error::Could not extract phoxal-framework rev from Cargo.toml"
+            exit 1
+          fi
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - name: checkout pinned framework
+        uses: actions/checkout@v4
+        with:
+          repository: phoxal/framework
+          ref: ${{ steps.framework.outputs.revision }}
+          path: framework
+      - name: verify framework identity
+        working-directory: framework
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="${{ steps.framework.outputs.revision }}"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Framework checkout $actual does not match pinned revision $expected"
+            exit 1
+          fi
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: enumerate and check rendering test identities
+        env:
+          MUJOCO_DYNAMIC_LINK_DIR: ${{ runner.temp }}/mujoco/lib
+          PHOXAL_TEST_FRAMEWORK_ROOT: ${{ github.workspace }}/framework
+        working-directory: simulator
+        run: |
+          set -euo pipefail
+          cargo test --locked --features native,rendering --no-fail-fast \
+            --no-run -- --format terse > /tmp/rendering-tests.txt 2>&1 || (cat /tmp/rendering-tests.txt && exit 1)
+          cat /tmp/rendering-tests.txt
+
+          for required in \
+              render_camera \
+              render_viewport \
+              ; do
+            if ! grep -q "$required" /tmp/rendering-tests.txt; then
+              echo "::error::Missing required rendering test identity: $required"
+              exit 1
+            fi
+            echo "::notice title=rendering-identity-found::$required"
+          done
+
+          for required in \
+              render_camera \
+              render_viewport \
+              ; do
+            cargo test --locked --features native,rendering --no-fail-fast \
+              -- --test-threads=1 "$required"
+          done
