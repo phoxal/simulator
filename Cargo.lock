@@ -3285,7 +3285,7 @@ dependencies = [
 [[package]]
 name = "phoxal"
 version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=8d1adb442dfec0ffbf993ec924519fd963d9e838#8d1adb442dfec0ffbf993ec924519fd963d9e838"
+source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -3305,7 +3305,7 @@ dependencies = [
 [[package]]
 name = "phoxal-build"
 version = "0.1.0"
-source = "git+https://github.com/phoxal/framework.git?rev=8d1adb442dfec0ffbf993ec924519fd963d9e838#8d1adb442dfec0ffbf993ec924519fd963d9e838"
+source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
 dependencies = [
  "heck",
  "prost",
@@ -3319,7 +3319,7 @@ dependencies = [
 [[package]]
 name = "phoxal-component-bno085"
 version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=8d1adb442dfec0ffbf993ec924519fd963d9e838#8d1adb442dfec0ffbf993ec924519fd963d9e838"
+source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
 dependencies = [
  "phoxal",
  "prost",
@@ -3328,7 +3328,7 @@ dependencies = [
 [[package]]
 name = "phoxal-component-ddsm115"
 version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=8d1adb442dfec0ffbf993ec924519fd963d9e838#8d1adb442dfec0ffbf993ec924519fd963d9e838"
+source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
 dependencies = [
  "phoxal",
  "prost",
@@ -3337,7 +3337,7 @@ dependencies = [
 [[package]]
 name = "phoxal-component-oak_d_lite"
 version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=8d1adb442dfec0ffbf993ec924519fd963d9e838#8d1adb442dfec0ffbf993ec924519fd963d9e838"
+source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
 dependencies = [
  "phoxal",
  "prost",
@@ -3346,7 +3346,7 @@ dependencies = [
 [[package]]
 name = "phoxal-component-vl53l1x"
 version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=8d1adb442dfec0ffbf993ec924519fd963d9e838#8d1adb442dfec0ffbf993ec924519fd963d9e838"
+source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
 dependencies = [
  "phoxal",
  "prost",
@@ -3355,7 +3355,7 @@ dependencies = [
 [[package]]
 name = "phoxal-component-zed_f9p"
 version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=8d1adb442dfec0ffbf993ec924519fd963d9e838#8d1adb442dfec0ffbf993ec924519fd963d9e838"
+source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
 dependencies = [
  "phoxal",
  "prost",
@@ -3364,7 +3364,7 @@ dependencies = [
 [[package]]
 name = "phoxal-service-motion"
 version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=8d1adb442dfec0ffbf993ec924519fd963d9e838#8d1adb442dfec0ffbf993ec924519fd963d9e838"
+source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
 dependencies = [
  "phoxal",
  "prost",

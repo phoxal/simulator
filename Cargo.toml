@@ -39,43 +39,43 @@ rendering = ["native", "dep:cgl", "dep:glutin"]
 [dependencies]
 # Component contracts this simulator knows how to compose into native scenes.
 phoxal-component-bno085 = {
-    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
+    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
     version = "0.68.0",
     default-features = false,
     optional = true,
 }
 phoxal-component-ddsm115 = {
-    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
+    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
     version = "0.68.0",
     default-features = false,
     optional = true,
 }
 phoxal-component-oak_d_lite = {
-    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
+    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
     version = "0.68.0",
     default-features = false,
     optional = true,
 }
 phoxal-component-vl53l1x = {
-    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
+    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
     version = "0.68.0",
     default-features = false,
     optional = true,
 }
 phoxal-component-zed_f9p = {
-    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
+    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
     version = "0.68.0",
     default-features = false,
     optional = true,
 }
 phoxal = {
-    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
+    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
     version = "=0.68.0",
     default-features = false,
     features = ["session", "port"],
 }
 phoxal-service-motion = {
-    git = "https://github.com/phoxal/framework.git", rev = "8d1adb442dfec0ffbf993ec924519fd963d9e838",
+    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
     version = "0.68.0",
 }
 prost = "0.14.4"
