@@ -78,6 +78,15 @@ phoxal-service-motion = {
     git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
     version = "0.68.0",
 }
+# Shared inert bundle / artifact format. The simulator's bundle
+# receiver keeps BundleFacts and all admission operations but now
+# imports the records from the canonical owner (the framework's
+# internal/artifact-format crate) instead of the retired compiler
+# crate.
+phoxal-artifact-format = {
+    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
+    version = "0.1.0",
+}
 prost = "0.14.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.149"

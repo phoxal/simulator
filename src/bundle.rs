@@ -1,9 +1,10 @@
 use crate::mujoco::ClosedModel;
 use crate::mujoco::Resource;
-use phoxal_project::BundleComponent;
-use phoxal_project::BundleManifest;
-use phoxal_project::BundleProvenance;
-use phoxal_project::BundleSimulation;
+use phoxal_artifact_format::bundle::BundleComponent;
+use phoxal_artifact_format::bundle::BundleManifest;
+use phoxal_artifact_format::bundle::BundleProvenance;
+use phoxal_artifact_format::bundle::BundleSimulation;
+use phoxal_artifact_format::bundle::digest_source_files;
 use serde::Deserialize;
 use sha2::Digest;
 use sha2::Sha256;
@@ -89,7 +90,7 @@ impl BundleFacts {
             let path = regular_file_under(&source_root, Path::new(&file.path), &file.path)?;
             verify_digest(&path, file.bytes, &file.sha256)?;
         }
-        let digest = phoxal_project::digest_source_files(&self.provenance.source_tree.files);
+        let digest = digest_source_files(&self.provenance.source_tree.files);
         if digest != self.provenance.source_tree.digest {
             return Err(format!(
                 "bundle source closure digest {} does not match staged files {}",
