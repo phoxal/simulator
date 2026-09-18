@@ -36,7 +36,7 @@ impl PhysicsQuantum {
             Ok(Self(seconds))
         } else {
             Err(SceneError::Model(
-                crate::error::ModelError::InvalidTimestep(seconds),
+                crate::mujoco::ModelError::InvalidTimestep(seconds),
             ))
         }
     }
@@ -66,7 +66,7 @@ pub enum ScenePhase {
 /// scene owner returns to its event loop.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StateSnapshot {
-    model_identity: crate::ModelIdentity,
+    model_identity: crate::mujoco::ModelIdentity,
     boundary: u64,
     time_seconds: f64,
     qpos: Box<[f64]>,
@@ -81,7 +81,7 @@ pub struct StateSnapshot {
 impl StateSnapshot {
     /// Returns the immutable model identity that owns this snapshot.
     #[must_use]
-    pub const fn model_identity(&self) -> crate::ModelIdentity {
+    pub const fn model_identity(&self) -> crate::mujoco::ModelIdentity {
         self.model_identity
     }
 
