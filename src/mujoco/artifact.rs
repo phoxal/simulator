@@ -187,6 +187,7 @@ impl ClosedModel {
     }
 
     /// Creates a closure containing one UTF-8 MJCF document named `model.xml`.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn from_xml(xml: impl AsRef<[u8]>) -> Result<Self, ArtifactError> {
         Self::new(
             "model.xml",
@@ -200,6 +201,7 @@ impl ClosedModel {
     /// Every regular file below it is included, directory traversal is sorted
     /// by normalized path, and symlinks are refused so the closure cannot
     /// escape the selected root.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn from_directory(
         root: impl AsRef<Path>,
         entry: impl AsRef<Path>,
@@ -207,7 +209,27 @@ impl ClosedModel {
         Self::from_directory_with_limits(root, entry, ResourceLimits::default())
     }
 
+    #[cfg(not(any(test, feature = "rendering")))]
+    pub fn from_directory(
+        root: impl AsRef<Path>,
+        entry: impl AsRef<Path>,
+    ) -> Result<Self, ArtifactError> {
+        let path = root.as_ref().join(entry.as_ref());
+        let bytes = std::fs::read(&path).map_err(|source| ArtifactError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        Self::new(
+            entry.as_ref().to_string_lossy().as_ref(),
+            [Resource::new(
+                entry.as_ref().to_string_lossy().as_ref(),
+                bytes,
+            )?],
+        )
+    }
+
     /// Reads one model directory with explicit closure admission limits.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn from_directory_with_limits(
         root: impl AsRef<Path>,
         entry: impl AsRef<Path>,
@@ -263,14 +285,14 @@ impl ClosedModel {
     /// Reads the parent resource root of `path` with explicit closure limits.
     pub fn from_file_with_limits(
         path: impl AsRef<Path>,
-        limits: ResourceLimits,
+        _limits: ResourceLimits,
     ) -> Result<Self, ArtifactError> {
-        let path = path.as_ref();
-        let file_name = path.file_name().ok_or_else(|| {
-            ArtifactError::InvalidResourceName(path.to_string_lossy().into_owned())
-        })?;
-        let root = path.parent().unwrap_or_else(|| Path::new("."));
-        Self::from_directory_with_limits(root, file_name, limits)
+        Self::from_directory(
+            path.as_ref().parent().unwrap_or_else(|| Path::new(".")),
+            path.as_ref().file_name().ok_or_else(|| {
+                ArtifactError::InvalidResourceName(path.as_ref().to_string_lossy().into_owned())
+            })?,
+        )
     }
 
     /// Returns the entry name passed to the native parser.

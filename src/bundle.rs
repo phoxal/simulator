@@ -3,6 +3,7 @@ use crate::mujoco::Resource;
 use phoxal_artifact_format::bundle::BundleComponent;
 use phoxal_artifact_format::bundle::BundleManifest;
 use phoxal_artifact_format::bundle::BundleProvenance;
+#[cfg(feature = "rendering")]
 use phoxal_artifact_format::bundle::BundleSimulation;
 use phoxal_artifact_format::bundle::digest_source_files;
 use serde::Deserialize;

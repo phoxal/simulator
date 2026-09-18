@@ -35,12 +35,11 @@ pub use error::ModelError;
 pub use error::{SceneError, WorkspaceError};
 #[cfg(feature = "native")]
 pub use model::{Model, ModelIdentity};
-#[cfg(feature = "native")]
-pub(crate) use model::{
-    ActuatorBinding, ActuatorHandle, ActuatorInfo, ActuatorMode,
-};
 #[cfg(any(test, feature = "rendering"))]
-pub(crate) use model::{CameraBinding, JointKind, SensorBinding, SensorKind, SiteBinding};
+pub(crate) use model::{
+    ActuatorBinding, ActuatorHandle, ActuatorInfo, ActuatorMode, CameraBinding, JointKind,
+    SensorBinding, SensorKind, SiteBinding,
+};
 #[cfg(any(test, feature = "rendering"))]
 pub use model::{
     BodyHandle, BodyInfo, CameraHandle, CameraInfo, JointHandle, JointInfo, ModelCounts,
@@ -57,7 +56,9 @@ pub use scene::RenderedCamera;
 #[cfg(feature = "rendering")]
 pub use scene::ViewCamera;
 #[cfg(feature = "native")]
-pub use scene::{PhysicsQuantum, StateSnapshot, Workspace};
+pub use scene::{PhysicsQuantum, StateSnapshot};
+#[cfg(any(test, feature = "rendering"))]
+pub use scene::Workspace;
 #[cfg(feature = "rendering")]
 pub use scene::{Scene, ScenePhase, SceneStep};
 

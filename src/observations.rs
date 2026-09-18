@@ -1,10 +1,14 @@
 //! Sensor payloads and explicit source membership for each native observation cut.
+#[cfg(feature = "rendering")]
 use crate::remote::{NativeProviderError, ProviderSet};
 use phoxal::communication::{
     session::PortKind,
     simulation::{Observation, ProductDisposition, ProductMembership},
 };
-use crate::mujoco::{Model, StateSnapshot};
+#[cfg(feature = "rendering")]
+use crate::mujoco::Model;
+use crate::mujoco::StateSnapshot;
+#[cfg(feature = "rendering")]
 use prost::{Message, Name};
 use sha2::{Digest, Sha256};
 
@@ -14,14 +18,15 @@ pub fn packet(
     state: &StateSnapshot,
     quantum_ns: u64,
     payload: Vec<u8>,
-) -> Result<Observation, NativeProviderError> {
+) -> Result<Observation, String> {
     let capture_time_ns = state
         .boundary()
         .checked_mul(quantum_ns)
-        .ok_or_else(|| NativeProviderError::InvalidPayload("capture time overflow".into()))?;
-    let sequence = state.boundary().checked_add(1).ok_or_else(|| {
-        NativeProviderError::InvalidPayload("observation sequence overflow".into())
-    })?;
+        .ok_or_else(|| "capture time overflow".to_owned())?;
+    let sequence = state
+        .boundary()
+        .checked_add(1)
+        .ok_or_else(|| "observation sequence overflow".to_owned())?;
     Ok(Observation {
         membership: Some(ProductMembership {
             producer: producer.to_owned(),
@@ -97,11 +102,12 @@ pub fn not_due(
     port: &str,
     state: &StateSnapshot,
     quantum_ns: u64,
-) -> Result<Observation, NativeProviderError> {
+) -> Result<Observation, String> {
     let mut observation = packet(producer, port, state, quantum_ns, Vec::new())?;
-    let member = observation.membership.as_mut().ok_or_else(|| {
-        NativeProviderError::InvalidPayload("observation membership absent".into())
-    })?;
+    let member = observation
+        .membership
+        .as_mut()
+        .ok_or_else(|| "observation membership absent".to_owned())?;
     member.disposition = ProductDisposition::NotDue as i32;
     member.item_count = 0;
     Ok(observation)

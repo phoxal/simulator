@@ -85,11 +85,13 @@ impl Model {
     }
 
     /// Builds a model from one in-memory MJCF document.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn from_xml(xml: impl AsRef<[u8]>) -> Result<Self, ModelError> {
         Self::from_closed(ClosedModel::from_xml(xml)?)
     }
 
     /// Reads an explicit model directory and compiles its closed resource set.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self, ModelError> {
         Self::from_closed(ClosedModel::from_file(path)?)
     }

@@ -3,7 +3,9 @@
 mod binding;
 #[cfg(feature = "rendering")]
 mod camera;
+#[cfg(feature = "rendering")]
 mod config;
+#[cfg(feature = "rendering")]
 mod geodesy;
 #[cfg(feature = "rendering")]
 mod observations;
@@ -16,6 +18,7 @@ mod tests;
 pub(crate) use config::{
     ActuationDeclaration, ActuatorTarget, NativeControlMode, ObservationBinding,
 };
+#[cfg(feature = "rendering")]
 pub(crate) use geodesy::Georeference;
 #[cfg(feature = "rendering")]
 pub(crate) use runtime::ComponentProvider;

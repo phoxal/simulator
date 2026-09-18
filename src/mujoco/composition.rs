@@ -15,11 +15,15 @@ use mujoco_rs::mujoco_c::{
 };
 use mujoco_rs::prelude::MjSpec;
 use mujoco_rs::wrappers::{MjVfs, SpecItem};
+#[cfg(any(test, feature = "rendering"))]
 use sha2::{Digest, Sha256};
 
 use crate::mujoco::artifact::{ClosedModel, Resource};
 use crate::mujoco::error::ModelError;
-use crate::mujoco::model::{Model, ModelIdentity};
+#[cfg(any(test, feature = "rendering"))]
+use crate::mujoco::model::Model;
+#[cfg(any(test, feature = "rendering"))]
+use crate::mujoco::model::ModelIdentity;
 
 /// Separator used by the native namespace assigned to one component
 /// instance.
@@ -145,12 +149,14 @@ impl ModelComposition {
 
     /// Root scene artifact used for native parsing.
     #[must_use]
+    #[cfg(any(test, feature = "rendering"))]
     pub fn scene(&self) -> &ClosedModel {
         &self.scene
     }
 
     /// Canonical fixed attachment list.
     #[must_use]
+    #[cfg(any(test, feature = "rendering"))]
     pub fn attachments(&self) -> &[ComponentAttachment] {
         &self.attachments
     }
@@ -160,6 +166,7 @@ impl ModelComposition {
     /// This is a selection identity, distinct from the canonical
     /// [`Model::identity`] derived from the retained compiled artifact.
     #[must_use]
+    #[cfg(any(test, feature = "rendering"))]
     pub fn identity(&self) -> ModelIdentity {
         ModelIdentity(composition_digest(&self.scene, &self.attachments))
     }
@@ -170,7 +177,9 @@ impl ModelComposition {
     /// returned model also retains the complete root and component resource
     /// closure in its artifact, together with a deterministic composition
     /// manifest that another native compiler can use to repeat the selection.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn compile(&self) -> Result<Model, ModelError> {
+        #[cfg(any(test, feature = "rendering"))]
         validate_scene_policy(&self.scene)?;
         let resource_prefixes = self
             .attachments
@@ -223,6 +232,7 @@ impl ModelComposition {
         Model::from_closed(artifact)
     }
 
+    #[cfg(any(test, feature = "rendering"))]
     fn composed_artifact(&self, serialized: Vec<u8>) -> Result<ClosedModel, ModelError> {
         // The serialized specification is the portable entry at the VFS root.
         // Preserve the original authored entry under a private name so the
@@ -302,7 +312,9 @@ impl SceneComposition {
     }
 
     /// Compiles the fixed robot and scene composition into one immutable model.
+    #[cfg(any(test, feature = "rendering"))]
     pub fn compile(&self) -> Result<Model, ModelError> {
+        #[cfg(any(test, feature = "rendering"))]
         validate_scene_policy(&self.scene)?;
         validate_component_policy(&self.robot, "robot")?;
         let robot_resource_prefix = "__phoxal_robot__/".to_owned();
@@ -503,6 +515,7 @@ fn insert_retained_resource(
 }
 
 /// Composes a robot closure into a scene after attaching its selected components.
+#[cfg(any(test, feature = "rendering"))]
 pub fn compose_scene(
     scene: ClosedModel,
     robot: ClosedModel,
@@ -686,6 +699,7 @@ fn validate_native_names_with_affixes(
 }
 
 /// Compose one root scene and explicit component attachments.
+#[cfg(any(test, feature = "rendering"))]
 pub fn compose_model(
     scene: ClosedModel,
     attachments: impl IntoIterator<Item = ComponentAttachment>,
@@ -829,6 +843,7 @@ fn compile_spec_with_vfs(spec: &mut MjSpec, vfs: &MjVfs) -> Result<(), ModelErro
     Ok(())
 }
 
+#[cfg(any(test, feature = "rendering"))]
 fn validate_scene_policy(scene: &ClosedModel) -> Result<(), ModelError> {
     validate_xml_policy(scene, "scene", &["keyframe"])
 }
@@ -883,6 +898,7 @@ fn contains_xml_tag(xml: &str, expected: &str) -> bool {
     false
 }
 
+#[cfg(any(test, feature = "rendering"))]
 fn composition_manifest(composition: &ModelComposition) -> Vec<u8> {
     let mut manifest = Vec::new();
     manifest.extend_from_slice(b"phoxal-mujoco-composition-v1\0");
@@ -963,6 +979,7 @@ fn validate_composed_name(value: &str, field: &'static str) -> Result<(), Compos
     Ok(())
 }
 
+#[cfg(any(test, feature = "rendering"))]
 fn composition_digest(scene: &ClosedModel, attachments: &[ComponentAttachment]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"phoxal-mujoco-composition-v1");
@@ -980,6 +997,7 @@ fn composition_digest(scene: &ClosedModel, attachments: &[ComponentAttachment]) 
     digest.finalize().into()
 }
 
+#[cfg(any(test, feature = "rendering"))]
 fn feed_bytes(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_be_bytes());
     digest.update(bytes);

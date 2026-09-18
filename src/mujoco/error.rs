@@ -150,7 +150,7 @@ pub enum ModelError {
     },
 }
 
-#[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 /// Errors raised by an owned non-authoritative MuJoCo computation workspace.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
@@ -187,7 +187,7 @@ pub enum WorkspaceError {
     },
 }
 
-#[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 /// Errors raised by authoritative fixed-step scene execution.
 #[derive(Debug, thiserror::Error)]
 pub enum SceneError {

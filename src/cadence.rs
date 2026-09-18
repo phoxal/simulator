@@ -1,5 +1,6 @@
 //! Deterministic source cadence, expressed without an accumulating float clock.
 
+#[cfg(feature = "rendering")]
 use crate::remote::NativeProviderError;
 
 const TICKS_PER_SECOND: u128 = 1_000_000_000_000_000;
@@ -11,7 +12,7 @@ pub(crate) struct Cadence {
 }
 
 impl Cadence {
-    pub(crate) fn new(rate_hz: f64, quantum_ns: u64) -> Result<Self, NativeProviderError> {
+    pub(crate) fn new(rate_hz: f64, quantum_ns: u64) -> Result<Self, String> {
         let microhertz = rate_hz * 1_000_000.0;
         if !microhertz.is_finite()
             || microhertz < 1.0
@@ -19,9 +20,9 @@ impl Cadence {
             || (microhertz - microhertz.round()).abs() > 1e-5
             || quantum_ns == 0
         {
-            return Err(NativeProviderError::InvalidPayload(
-                "publish rate must be positive with at most six decimal places".into(),
-            ));
+            return Err(
+                "publish rate must be positive with at most six decimal places".to_owned(),
+            );
         }
         Self::from_microhertz(microhertz.round() as u64, quantum_ns)
     }
@@ -29,12 +30,10 @@ impl Cadence {
     pub(crate) fn from_microhertz(
         rate_microhertz: u64,
         quantum_ns: u64,
-    ) -> Result<Self, NativeProviderError> {
+    ) -> Result<Self, String> {
         let ticks_per_quantum = u128::from(rate_microhertz) * u128::from(quantum_ns);
         if ticks_per_quantum == 0 || ticks_per_quantum > TICKS_PER_SECOND {
-            return Err(NativeProviderError::InvalidPayload(
-                "publish rate exceeds the scene quantum".into(),
-            ));
+            return Err("publish rate exceeds the scene quantum".to_owned());
         }
         Ok(Self {
             ticks_per_quantum,

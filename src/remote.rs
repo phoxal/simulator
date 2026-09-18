@@ -463,6 +463,7 @@ fn validate_fqn(
 /// returned actuation payloads into the complete MuJoCo control vector.  No
 /// provider implementation is allowed to infer a missing port or actuator.
 #[cfg(feature = "native")]
+#[cfg(feature = "rendering")]
 pub trait NativeProvider {
     /// Provider encoding/decoding failure.
     type Error: fmt::Display;
@@ -494,6 +495,7 @@ pub trait NativeProvider {
 /// Errors returned by the common typed MuJoCo payload helpers.
 #[cfg(feature = "native")]
 #[derive(Debug, thiserror::Error)]
+#[cfg(feature = "rendering")]
 pub enum NativeProviderError {
     /// A model-local native binding could not be resolved.
     #[error("native model binding failed: {0}")]

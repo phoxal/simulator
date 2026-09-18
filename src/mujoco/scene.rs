@@ -17,6 +17,7 @@ use rendering::RendererState;
 #[cfg(feature = "rendering")]
 pub use rendering::{RenderedCamera, ViewCamera};
 
+#[cfg(feature = "rendering")]
 use crate::mujoco::error::{SceneError, WorkspaceError};
 use crate::mujoco::model::Model;
 #[cfg(any(test, feature = "rendering"))]
@@ -33,6 +34,7 @@ impl PhysicsQuantum {
     ///
     /// The value is retained as an `f64` because that is MuJoCo's native time
     /// representation.
+    #[cfg(feature = "rendering")]
     pub fn from_seconds(seconds: f64) -> Result<Self, SceneError> {
         if seconds.is_finite() && seconds > 0.0 {
             Ok(Self(seconds))
@@ -40,6 +42,15 @@ impl PhysicsQuantum {
             Err(SceneError::Model(
                 crate::mujoco::ModelError::InvalidTimestep(seconds),
             ))
+        }
+    }
+
+    #[cfg(not(feature = "rendering"))]
+    pub fn from_seconds(seconds: f64) -> Result<Self, crate::mujoco::ModelError> {
+        if seconds.is_finite() && seconds > 0.0 {
+            Ok(Self(seconds))
+        } else {
+            Err(crate::mujoco::ModelError::InvalidTimestep(seconds))
         }
     }
 
@@ -183,7 +194,17 @@ impl std::fmt::Debug for Workspace {
 }
 
 impl Workspace {
+    /// Returns the immutable model paired with this workspace.
+    #[must_use]
+    pub fn model(&self) -> &Model {
+        &self.model
+    }
+}
+
+#[cfg(feature = "rendering")]
+impl Workspace {
     /// Allocates a data workspace for `model` and performs initial forward evaluation.
+    #[cfg(feature = "rendering")]
     pub fn new(model: &Model) -> Result<Self, WorkspaceError> {
         let model_for_data = model.inner_arc();
         let mut data = MjData::try_new(model_for_data)
@@ -201,12 +222,13 @@ impl Workspace {
     }
 
     /// Returns the immutable model paired with this workspace.
-    #[must_use]
+    #[cfg(feature = "rendering")]
     pub fn model(&self) -> &Model {
         &self.model
     }
 
     /// Returns the current copied workspace state.
+    #[cfg(feature = "rendering")]
     pub fn snapshot(&self) -> Result<StateSnapshot, WorkspaceError> {
         self.ensure_finite_state()?;
         let time_seconds = self.data.time();
@@ -225,6 +247,7 @@ impl Workspace {
     }
 
     /// Resets the native data and performs forward evaluation without integrating time.
+    #[cfg(feature = "rendering")]
     pub fn reset(&mut self) -> Result<(), WorkspaceError> {
         self.data.reset();
         self.data.forward();
@@ -459,6 +482,7 @@ impl Workspace {
     }
 }
 
+#[cfg(feature = "rendering")]
 fn validate_finite_slice(name: &'static str, values: &[f64]) -> Result<(), WorkspaceError> {
     for (index, value) in values.iter().copied().enumerate() {
         if !value.is_finite() {
@@ -468,6 +492,7 @@ fn validate_finite_slice(name: &'static str, values: &[f64]) -> Result<(), Works
     Ok(())
 }
 
+#[cfg(feature = "rendering")]
 fn validate_state_values(
     name: &'static str,
     values: &[f64],
@@ -515,6 +540,7 @@ impl std::fmt::Debug for Scene {
     }
 }
 
+#[cfg(feature = "rendering")]
 impl Scene {
     /// Creates a paused scene using the model's source-authored native timestep.
     pub fn new(model: Model) -> Result<Self, SceneError> {
@@ -762,6 +788,7 @@ impl Scene {
     }
 }
 
+#[cfg(feature = "rendering")]
 fn validate_control(workspace: &Workspace, index: usize, value: f64) -> Result<(), SceneError> {
     if !value.is_finite() {
         return Err(SceneError::NonFiniteControl { index, value });

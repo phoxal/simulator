@@ -81,7 +81,7 @@ pub(super) fn load_composed_model(scene: &Path, bundle: &BundleFacts) -> Result<
             .map_err(|error| error.to_string())?,
         );
     }
-    SceneComposition::new(
+    let composition = SceneComposition::new(
         scene,
         robot,
         bundle.manifest.document.robot.id.clone(),
@@ -89,7 +89,24 @@ pub(super) fn load_composed_model(scene: &Path, bundle: &BundleFacts) -> Result<
         robot_root,
         attachments,
     )
-    .map_err(|error| error.to_string())?
-    .compile()
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    #[cfg(any(test, feature = "rendering"))]
+    let model = composition
+        .compile()
+        .map_err(|error| error.to_string())?;
+    #[cfg(not(any(test, feature = "rendering")))]
+    let model = {
+        // Native probe path cannot compile the composition because
+        // --features native omits the compilation code paths. The
+        // composition was successfully built (the SceneComposition was
+        // constructed above) so the bundle can still be probed for
+        // identity, providers, and actuation bindings.
+        let _ = composition;
+        return Err(
+            "phoxal-simulator-mujoco --features native cannot compile a \
+             composed model; only --probe is supported in this configuration"
+                .to_owned(),
+        );
+    };
+    Ok(model)
 }

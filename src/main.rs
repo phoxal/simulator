@@ -1,4 +1,5 @@
 #[cfg(feature = "rendering")]
+#[cfg(feature = "rendering")]
 mod authority;
 mod bindings;
 mod bundle;
@@ -9,6 +10,7 @@ mod config;
 mod desktop;
 #[cfg(feature = "rendering")]
 mod execution;
+#[cfg(feature = "rendering")]
 mod georeference;
 mod mujoco;
 mod native_provider;
