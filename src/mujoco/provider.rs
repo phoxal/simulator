@@ -668,7 +668,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ClosedModel, Model};
+    use crate::mujoco::{ClosedModel, Model};
 
     const FIXTURE: &str = r#"
         <mujoco model="provider-fixture">

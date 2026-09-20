@@ -1268,7 +1268,8 @@ mod closed_scope_tests {
             resource("robot/parts/assets.xml", r#"<mujoco><asset><mesh name="tetra" file="tetra.obj"/></asset></mujoco>"#),
             resource("robot/assets/tetra.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n"),
         ]).unwrap();
-        crate::Model::from_closed(artifact).expect("native and admission path resolution agree");
+        crate::mujoco::Model::from_closed(artifact)
+            .expect("native and admission path resolution agree");
     }
 
     #[test]

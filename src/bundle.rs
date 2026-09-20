@@ -1,10 +1,8 @@
 use crate::mujoco::ClosedModel;
 use crate::mujoco::Resource;
-use phoxal_artifact_format::bundle::BundleComponent;
-use phoxal_artifact_format::bundle::BundleManifest;
-use phoxal_artifact_format::bundle::BundleProvenance;
-use phoxal_artifact_format::bundle::BundleSimulation;
-use phoxal_artifact_format::bundle::digest_source_files;
+use phoxal::artifact::bundle::{
+    BundleComponent, BundleManifest, BundleProvenance, BundleSimulation, digest_source_files,
+};
 use serde::Deserialize;
 use sha2::Digest;
 use sha2::Sha256;

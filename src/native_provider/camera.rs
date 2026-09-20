@@ -1,12 +1,12 @@
 use super::observations::encode_observation;
-use crate::remote::NativeProviderError;
-use crate::remote::ProviderSet;
-use phoxal::communication::simulation::Observation;
-use phoxal_component_oak_d_lite as oak_contract;
 use crate::mujoco::CameraBinding;
 use crate::mujoco::StateSnapshot;
 use crate::mujoco::Workspace;
+use crate::remote::NativeProviderError;
+use crate::remote::ProviderSet;
+use phoxal::communication::simulation::Observation;
 use phoxal::port::PortSignature;
+use phoxal_component_oak_d_lite as oak_contract;
 use prost::Message;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

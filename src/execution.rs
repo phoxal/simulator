@@ -1,5 +1,6 @@
 //! One boundary coordinator for finite headless runs and desktop controls.
 
+use crate::mujoco::{Model, StateSnapshot, Workspace};
 use crate::{
     authority::{AuthorityClientError, AuthorityState},
     desktop::{Command, Worker},
@@ -7,7 +8,6 @@ use crate::{
     remote::{RemoteSceneError, RemoteSceneRun},
 };
 use phoxal::session::Simulation;
-use crate::mujoco::{Model, StateSnapshot, Workspace};
 use std::{
     sync::mpsc::TryRecvError,
     time::{Duration, Instant},

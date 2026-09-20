@@ -5,14 +5,14 @@ use crate::bundle::BundleFacts;
 use crate::composition::load_composed_model;
 use crate::config::Options;
 use crate::config::Presentation;
+use crate::mujoco::Model;
+use crate::mujoco::PhysicsQuantum;
+use crate::mujoco::Scene;
 use crate::native_provider::ComponentProvider;
 use crate::remote::ProvenanceInput;
 use crate::remote::RemoteSceneRun;
 use crate::remote::SIMULATION_PROTOCOL;
 use crate::remote::quantum_nanoseconds;
-use crate::mujoco::Model;
-use crate::mujoco::PhysicsQuantum;
-use crate::mujoco::Scene;
 use serde::Serialize;
 
 pub(super) const CONTROL_PRINCIPAL: &str = "simulator";

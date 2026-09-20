@@ -3284,8 +3284,8 @@ dependencies = [
 
 [[package]]
 name = "phoxal"
-version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
+version = "0.0.0-dev.1"
+source = "git+https://github.com/phoxal/framework.git?rev=40bc9951e#40bc9951eede6215e682fe6a99f3c3563d188a2f"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -3303,21 +3303,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "phoxal-artifact-format"
-version = "0.1.0"
-source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
-dependencies = [
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "phoxal-build"
-version = "0.1.0"
-source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
+version = "0.0.0-dev.1"
+source = "git+https://github.com/phoxal/framework.git?rev=40bc9951e#40bc9951eede6215e682fe6a99f3c3563d188a2f"
 dependencies = [
  "heck",
  "prost",
@@ -3330,8 +3318,8 @@ dependencies = [
 
 [[package]]
 name = "phoxal-component-bno085"
-version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
+version = "0.0.0-dev.1"
+source = "git+https://github.com/phoxal/framework.git?rev=40bc9951e#40bc9951eede6215e682fe6a99f3c3563d188a2f"
 dependencies = [
  "phoxal",
  "prost",
@@ -3339,8 +3327,8 @@ dependencies = [
 
 [[package]]
 name = "phoxal-component-ddsm115"
-version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
+version = "0.0.0-dev.1"
+source = "git+https://github.com/phoxal/framework.git?rev=40bc9951e#40bc9951eede6215e682fe6a99f3c3563d188a2f"
 dependencies = [
  "phoxal",
  "prost",
@@ -3348,8 +3336,8 @@ dependencies = [
 
 [[package]]
 name = "phoxal-component-oak_d_lite"
-version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
+version = "0.0.0-dev.1"
+source = "git+https://github.com/phoxal/framework.git?rev=40bc9951e#40bc9951eede6215e682fe6a99f3c3563d188a2f"
 dependencies = [
  "phoxal",
  "prost",
@@ -3357,8 +3345,8 @@ dependencies = [
 
 [[package]]
 name = "phoxal-component-vl53l1x"
-version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
+version = "0.0.0-dev.1"
+source = "git+https://github.com/phoxal/framework.git?rev=40bc9951e#40bc9951eede6215e682fe6a99f3c3563d188a2f"
 dependencies = [
  "phoxal",
  "prost",
@@ -3366,17 +3354,26 @@ dependencies = [
 
 [[package]]
 name = "phoxal-component-zed_f9p"
-version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
+version = "0.0.0-dev.1"
+source = "git+https://github.com/phoxal/framework.git?rev=40bc9951e#40bc9951eede6215e682fe6a99f3c3563d188a2f"
 dependencies = [
  "phoxal",
  "prost",
 ]
 
 [[package]]
+name = "phoxal-package-macos"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "phoxal-service-motion"
-version = "0.68.0"
-source = "git+https://github.com/phoxal/framework.git?rev=61dd6d19f#61dd6d19fa067927015a0455e30a7142e90184fe"
+version = "0.0.0-dev.1"
+source = "git+https://github.com/phoxal/framework.git?rev=40bc9951e#40bc9951eede6215e682fe6a99f3c3563d188a2f"
 dependencies = [
  "phoxal",
  "prost",
@@ -3385,14 +3382,13 @@ dependencies = [
 
 [[package]]
 name = "phoxal-simulator-mujoco"
-version = "0.1.0"
+version = "0.0.0-dev.1"
 dependencies = [
  "cgl",
  "eframe",
  "glutin",
  "mujoco-rs",
  "phoxal",
- "phoxal-artifact-format",
  "phoxal-component-bno085",
  "phoxal-component-ddsm115",
  "phoxal-component-oak_d_lite",
@@ -3403,6 +3399,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
 ]

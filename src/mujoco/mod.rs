@@ -52,3 +52,10 @@ pub use scene::RenderedCamera;
 pub use scene::ViewCamera;
 #[cfg(feature = "native")]
 pub use scene::{PhysicsQuantum, Scene, ScenePhase, SceneStep, StateSnapshot, Workspace};
+
+#[cfg(test)]
+#[path = "tests/component_models.rs"]
+mod component_models;
+#[cfg(all(test, feature = "rendering"))]
+#[path = "tests/rendering.rs"]
+mod rendering_tests;

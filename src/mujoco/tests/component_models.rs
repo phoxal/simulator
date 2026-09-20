@@ -2,17 +2,58 @@
 
 #![cfg(feature = "native")]
 
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::OnceLock;
 
+use crate::mujoco::{Model, Scene};
 use phoxal::port::PortDescriptor;
 use phoxal_component_bno085 as bno085_contract;
 use phoxal_component_ddsm115 as ddsm115_contract;
 use phoxal_component_oak_d_lite as oak_contract;
 use phoxal_component_vl53l1x as vl53l1x_contract;
 use phoxal_component_zed_f9p as zed_contract;
-use crate::mujoco::{Model, Scene};
 use phoxal_service_motion as motion_contract;
+
+fn component_root(component: &str) -> PathBuf {
+    static ROOTS: OnceLock<BTreeMap<String, PathBuf>> = OnceLock::new();
+    let roots = ROOTS.get_or_init(|| {
+        let output = Command::new(env!("CARGO"))
+            .args(["metadata", "--format-version", "1", "--locked"])
+            .output()
+            .expect("Cargo metadata must run for native component tests");
+        assert!(
+            output.status.success(),
+            "Cargo metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("Cargo metadata JSON");
+        metadata["packages"]
+            .as_array()
+            .expect("Cargo metadata packages")
+            .iter()
+            .filter_map(|package| {
+                let name = package["name"].as_str()?;
+                let component = name.strip_prefix("phoxal-component-")?;
+                let manifest = PathBuf::from(package["manifest_path"].as_str()?);
+                Some((
+                    component.to_owned(),
+                    manifest
+                        .parent()
+                        .expect("component manifest parent")
+                        .to_owned(),
+                ))
+            })
+            .collect()
+    });
+    roots
+        .get(component)
+        .unwrap_or_else(|| panic!("component dependency `{component}` is missing"))
+        .clone()
+}
 
 fn assert_sensor_binding<P: PortDescriptor>(model: &Model, port: P, native_sensor: &str) {
     let binding = model
@@ -63,9 +104,8 @@ fn assert_actuator_binding<P: PortDescriptor>(model: &Model, port: P, native_act
 
 #[test]
 fn official_component_models_compile_from_their_closed_directories() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../framework/components");
     for component in ["bno085", "ddsm115", "oak_d_lite", "vl53l1x", "zed_f9p"] {
-        let root = components.join(component);
+        let root = component_root(component);
         let model = Model::from_file(root.join("model.xml"))
             .unwrap_or_else(|error| panic!("{component}/model.xml must compile: {error}"));
         assert_eq!(model.artifact().entry(), "model.xml");
@@ -78,11 +118,10 @@ fn official_component_models_compile_from_their_closed_directories() {
 
 #[test]
 fn component_models_leave_the_scene_physics_quantum_to_composition() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../framework/components");
     let mut timesteps = Vec::new();
 
     for component in ["bno085", "ddsm115", "oak_d_lite", "vl53l1x", "zed_f9p"] {
-        let root = components.join(component);
+        let root = component_root(component);
         let source = fs::read_to_string(root.join("model.xml"))
             .unwrap_or_else(|error| panic!("{component}/model.xml must be readable: {error}"));
         assert!(
@@ -107,9 +146,8 @@ fn component_models_leave_the_scene_physics_quantum_to_composition() {
 
 #[test]
 fn official_models_keep_capability_targets_and_native_signal_names() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../framework/components");
-
-    let bno085 = Model::from_file(components.join("bno085/model.xml")).expect("BNO085 model");
+    let bno085 =
+        Model::from_file(component_root("bno085").join("model.xml")).expect("BNO085 model");
     assert!(bno085.body("sensor_link").unwrap().is_some());
     assert!(bno085.site("sensor_site").unwrap().is_some());
     for sensor in ["imu_orientation", "accelerometer", "gyroscope"] {
@@ -147,7 +185,8 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
         crate::mujoco::SensorKind::Gyroscope
     );
 
-    let ddsm115 = Model::from_file(components.join("ddsm115/model.xml")).expect("DDSM115 model");
+    let ddsm115 =
+        Model::from_file(component_root("ddsm115").join("model.xml")).expect("DDSM115 model");
     assert!(ddsm115.joint("motor_joint").unwrap().is_some());
     assert!(ddsm115.actuator("motor").unwrap().is_some());
     for sensor in ["encoder_position", "encoder_velocity"] {
@@ -201,7 +240,8 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
             .is_some()
     );
 
-    let oak = Model::from_file(components.join("oak_d_lite/model.xml")).expect("OAK-D Lite model");
+    let oak =
+        Model::from_file(component_root("oak_d_lite").join("model.xml")).expect("OAK-D Lite model");
     for site in [
         "left_mono_site",
         "rgb_site",
@@ -228,7 +268,8 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
     assert_sensor_binding(&oak, oak_contract::ports::ACCELEROMETER, "accelerometer");
     assert_sensor_binding(&oak, oak_contract::ports::GYROSCOPE, "gyroscope");
 
-    let vl53l1x = Model::from_file(components.join("vl53l1x/model.xml")).expect("VL53L1X model");
+    let vl53l1x =
+        Model::from_file(component_root("vl53l1x").join("model.xml")).expect("VL53L1X model");
     assert!(vl53l1x.body("sensor_link").unwrap().is_some());
     assert!(vl53l1x.site("sensor_site").unwrap().is_some());
     assert!(vl53l1x.sensor("range").unwrap().is_some());
@@ -241,7 +282,7 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
         crate::mujoco::SensorKind::Rangefinder
     );
 
-    let zed = Model::from_file(components.join("zed_f9p/model.xml")).expect("ZED-F9P model");
+    let zed = Model::from_file(component_root("zed_f9p").join("model.xml")).expect("ZED-F9P model");
     assert!(zed.body("sensor_link").unwrap().is_some());
     assert!(zed.site("sensor_site").unwrap().is_some());
     assert_site_binding(&zed, zed_contract::ports::GNSS, "sensor_site");
@@ -249,8 +290,8 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
 
 #[test]
 fn native_bindings_fail_closed_for_wrong_kinds_and_missing_objects() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../framework/components");
-    let bno085 = Model::from_file(components.join("bno085/model.xml")).expect("BNO085 model");
+    let bno085 =
+        Model::from_file(component_root("bno085").join("model.xml")).expect("BNO085 model");
 
     let wrong_kind = bno085
         .bind_sensor(motion_contract::ports::ACTUATORS, "accelerometer")
@@ -277,9 +318,8 @@ fn native_bindings_fail_closed_for_wrong_kinds_and_missing_objects() {
 
 #[test]
 fn native_bindings_read_only_from_their_own_model_snapshot() {
-    let components = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../framework/components");
-
-    let bno085 = Model::from_file(components.join("bno085/model.xml")).expect("BNO085 model");
+    let bno085 =
+        Model::from_file(component_root("bno085").join("model.xml")).expect("BNO085 model");
     let bno085_snapshot = Scene::new(bno085.clone())
         .expect("BNO085 scene")
         .snapshot()
@@ -292,7 +332,8 @@ fn native_bindings_read_only_from_their_own_model_snapshot() {
         imu.info.dimension
     );
 
-    let ddsm115 = Model::from_file(components.join("ddsm115/model.xml")).expect("DDSM115 model");
+    let ddsm115 =
+        Model::from_file(component_root("ddsm115").join("model.xml")).expect("DDSM115 model");
     let ddsm115_snapshot = Scene::new(ddsm115.clone())
         .expect("DDSM115 scene")
         .snapshot()
@@ -306,7 +347,7 @@ fn native_bindings_read_only_from_their_own_model_snapshot() {
         .expect("DDSM115 encoder binding");
     assert_eq!(encoder.values(&ddsm115_snapshot).unwrap().len(), 1);
 
-    let zed = Model::from_file(components.join("zed_f9p/model.xml")).expect("ZED-F9P model");
+    let zed = Model::from_file(component_root("zed_f9p").join("model.xml")).expect("ZED-F9P model");
     let zed_snapshot = Scene::new(zed.clone())
         .expect("ZED-F9P scene")
         .snapshot()
@@ -316,7 +357,8 @@ fn native_bindings_read_only_from_their_own_model_snapshot() {
         .expect("ZED-F9P antenna binding");
     assert_eq!(antenna.position(&zed_snapshot).unwrap(), [0.0, 0.0, 0.01]);
 
-    let vl53l1x = Model::from_file(components.join("vl53l1x/model.xml")).expect("VL53L1X model");
+    let vl53l1x =
+        Model::from_file(component_root("vl53l1x").join("model.xml")).expect("VL53L1X model");
     let vl53l1x_snapshot = Scene::new(vl53l1x)
         .expect("VL53L1X scene")
         .snapshot()
@@ -367,12 +409,8 @@ fn component_facing_target(component: &str) -> Result<Model, Box<dyn std::error:
       </worldbody>
     </mujoco>"#,
     )?;
-    let component = crate::mujoco::ClosedModel::from_file(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../components")
-            .join(component)
-            .join("model.xml"),
-    )?;
+    let component =
+        crate::mujoco::ClosedModel::from_file(component_root(component).join("model.xml"))?;
     Ok(ModelComposition::new(
         scene,
         [ComponentAttachment::new(
