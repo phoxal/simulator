@@ -1,22 +1,17 @@
-[workspace]
-resolver = "3"
-members = ["tools/package-macos"]
-default-members = ["."]
-
 [package]
-name = "phoxal-simulator-mujoco"
+name = "phoxal-simulator"
 version = "0.0.0-dev.1"
 edition = "2024"
 rust-version = "1.95"
 license = "AGPL-3.0-only"
 publish = ["phoxal"]
 description = "Independent Phoxal MuJoCo simulator application."
-documentation = "https://docs.rs/phoxal-simulator-mujoco"
+documentation = "https://docs.rs/phoxal-simulator"
 homepage = "https://github.com/phoxal/simulator"
 repository = "https://github.com/phoxal/simulator"
 
 [[bin]]
-name = "phoxal-simulator-mujoco"
+name = "phoxal-simulator"
 path = "src/main.rs"
 required-features = ["rendering"]
 
@@ -39,6 +34,7 @@ native = [
 rendering = ["native", "dep:cgl", "dep:glutin"]
 
 [dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
 # Component contracts this simulator knows how to compose into native scenes.
 phoxal-component-bno085 = {
     registry = "phoxal",
