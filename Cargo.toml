@@ -41,43 +41,43 @@ rendering = ["native", "dep:cgl", "dep:glutin"]
 [dependencies]
 # Component contracts this simulator knows how to compose into native scenes.
 phoxal-component-bno085 = {
-    git = "https://github.com/phoxal/framework.git", rev = "40bc9951e",
+    registry = "phoxal",
     version = "=0.0.0-dev.1",
     default-features = false,
     optional = true,
 }
 phoxal-component-ddsm115 = {
-    git = "https://github.com/phoxal/framework.git", rev = "40bc9951e",
+    registry = "phoxal",
     version = "=0.0.0-dev.1",
     default-features = false,
     optional = true,
 }
 phoxal-component-oak_d_lite = {
-    git = "https://github.com/phoxal/framework.git", rev = "40bc9951e",
+    registry = "phoxal",
     version = "=0.0.0-dev.1",
     default-features = false,
     optional = true,
 }
 phoxal-component-vl53l1x = {
-    git = "https://github.com/phoxal/framework.git", rev = "40bc9951e",
+    registry = "phoxal",
     version = "=0.0.0-dev.1",
     default-features = false,
     optional = true,
 }
 phoxal-component-zed_f9p = {
-    git = "https://github.com/phoxal/framework.git", rev = "40bc9951e",
+    registry = "phoxal",
     version = "=0.0.0-dev.1",
     default-features = false,
     optional = true,
 }
 phoxal = {
-    git = "https://github.com/phoxal/framework.git", rev = "40bc9951e",
+    registry = "phoxal",
     version = "=0.0.0-dev.1",
     default-features = false,
     features = ["session", "port", "artifact"],
 }
 phoxal-service-motion = {
-    git = "https://github.com/phoxal/framework.git", rev = "40bc9951e",
+    registry = "phoxal",
     version = "=0.0.0-dev.1",
 }
 prost = "0.14.4"
