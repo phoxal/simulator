@@ -233,8 +233,7 @@ async fn execute_remote_run(
     let model_identity = run.provenance().model_identity.clone();
     let quantum_ns = run.provenance().quantum_ns;
     run.release().await.map_err(|error| error.to_string())?;
-    Ok(TerminalEvidence {
-        schema: "phoxal/simulation-run/v0".to_owned(),
+    Ok(TerminalEvidence::V0 {
         native_bindings,
         provenance,
         provider_contract_verified: true,
@@ -298,18 +297,39 @@ fn native_body_sample(
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct TerminalEvidence {
-    pub(super) native_bindings: serde_json::Value,
-    pub(super) provenance: crate::remote::SimulationProvenance,
-    pub(super) schema: String,
-    pub(super) provider_contract_verified: bool,
-    pub(super) outcome: String,
-    pub(super) completed_steps: u64,
-    pub(super) requested_steps: u64,
-    pub(super) presentation: String,
-    pub(super) model_identity: String,
-    pub(super) quantum_ns: u64,
-    pub(super) execution_id: String,
-    pub(super) timeline_id: String,
-    pub(super) native_body: Vec<NativeBodySample>,
+#[serde(tag = "schema")]
+pub(super) enum TerminalEvidence {
+    /// The first simulator terminal evidence generation.
+    ///
+    /// Carries the artifact [`crate::remote::SimulationProvenance`] and the
+    /// selected presentation label as runtime diagnostics alongside the
+    /// schema-tagged terminal record. Downstream readers may deserialize a
+    /// subset of these fields; serde will ignore unknown members by default.
+    #[serde(rename = "phoxal/simulation-run/v0")]
+    V0 {
+        /// Native binding closure recorded for the run.
+        native_bindings: serde_json::Value,
+        /// Simulation provenance recorded by the runner.
+        provenance: crate::remote::SimulationProvenance,
+        /// Whether the simulator's provider contract was independently verified.
+        provider_contract_verified: bool,
+        /// `success` or `stopped`.
+        outcome: String,
+        /// Completed native transitions.
+        completed_steps: u64,
+        /// Requested native transitions.
+        requested_steps: u64,
+        /// Selected presentation (`headless` or `desktop`).
+        presentation: String,
+        /// Native model identity.
+        model_identity: String,
+        /// Native quantum in nanoseconds.
+        quantum_ns: u64,
+        /// Supervisor execution identity.
+        execution_id: String,
+        /// Controlled timeline identity.
+        timeline_id: String,
+        /// Native root-body samples at 20 ms and terminal boundaries.
+        native_body: Vec<NativeBodySample>,
+    },
 }
