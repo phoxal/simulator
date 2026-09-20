@@ -19,7 +19,7 @@ mod tests;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let result = config::Options::parse(std::env::args_os().skip(1)).and_then(|options| {
+    let result = config::Options::from_env().and_then(|options| {
         if options.presentation == config::Presentation::Desktop && !options.probe {
             desktop::run(options)
         } else {
@@ -34,7 +34,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) if error.is_empty() => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("phoxal-simulator-mujoco: {error}");
+            eprintln!("phoxal-simulator: {error}");
             ExitCode::FAILURE
         }
     }

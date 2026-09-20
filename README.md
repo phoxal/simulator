@@ -11,12 +11,19 @@ An unknown outcome or required process, capture, or delivery failure ends the ru
 
 ## Installation boundary
 
-Normal robot projects do not depend on MuJoCo and should not install a native SDK through `cargo-phoxal`.
-`cargo-phoxal` owns selecting, provisioning, and launching a released simulator application, while this repository owns packaging MuJoCo and its licenses inside that application.
+Normal robot projects do not depend on MuJoCo or this package.
+`cargo-phoxal` owns downloading and verifying MuJoCo, building the matching registry release, retaining native licenses and provenance, and maintaining the user installation.
+This repository owns only the native simulator application and assumes that its build has been given a valid MuJoCo library directory.
 This keeps host-specific native libraries out of robot dependency graphs and gives each simulator release one inspectable native identity.
 
-Signed and notarized simulator releases are not published yet.
-Until they are available, simulator developers must build this application from source and pass its executable to `cargo phoxal` with `--simulator`.
+Normal users install and maintain the released application with:
+
+```sh
+cargo phoxal simulation install
+cargo phoxal simulation status
+```
+
+Simulator developers may still build this repository from source and pass its executable with `--simulator`.
 
 ## Build from source
 
@@ -46,19 +53,8 @@ cargo build --locked --release
 Offscreen capture uses CGL on macOS and EGL on Linux; Linux needs an EGL/OpenGL implementation such as Mesa.
 A headless run creates no desktop window.
 
-For a self-contained macOS application, package the built executable with the official native distribution:
-
-```sh
-cargo run --locked -p phoxal-package-macos -- \
-  --binary target/release/phoxal-simulator-mujoco \
-  --mujoco-distribution /Volumes/MuJoCo \
-  --version 0.0.0-dev.1 --output 'target/Phoxal Simulator.app'
-```
-
-The output must be a new directory.
-The application resolves MuJoCo relative to its executable, retains native licenses and library hashes, and checks loading without a library-path environment variable.
-Use `Contents/MacOS/phoxal-simulator-mujoco` inside the application as the `--simulator` path.
-This produces a locally signed development artifact; distribution signing and notarization remain release requirements.
+Packaging is not implemented in this repository.
+`cargo phoxal simulation install` owns the self-contained macOS application and Linux native installation so source releases cannot drift from the user-facing installer.
 
 ## Run
 
@@ -66,8 +62,10 @@ From a robot project, the development command prepares the immutable bundle, lau
 
 ```sh
 cargo phoxal simulation run simulation/scene.xml \
-  --headless --steps 50 --simulator /absolute/path/phoxal-simulator-mujoco
+  --headless --steps 50
 ```
+
+Use `--simulator /absolute/path/phoxal-simulator` only to inject a source-built executable.
 
 Use `--desktop` for the viewport, Run/Pause, Step, Reset, and Stop controls.
 Drag the viewport to orbit and scroll to zoom.
@@ -78,7 +76,7 @@ The viewport uses a separate read-only observation workspace and does not drive 
 A direct run needs a prepared simulation bundle and an already running supervisor:
 
 ```sh
-phoxal-simulator-mujoco \
+phoxal-simulator \
   --scene simulation/scene.xml --bundle /absolute/path/bundle \
   --connect unixsock-stream//tmp/phoxal-run/router.sock \
   --scope local --supervisor-id sim --run-id run \
@@ -92,7 +90,7 @@ A user stop before the finite bound is reported as stopped, without claiming tha
 Tooling can inspect native composition without connecting or integrating:
 
 ```sh
-phoxal-simulator-mujoco --probe --scene simulation/scene.xml \
+phoxal-simulator --probe --scene simulation/scene.xml \
   --bundle /absolute/path/probe-bundle --json --headless
 ```
 
