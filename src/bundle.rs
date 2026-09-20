@@ -12,10 +12,6 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(super) const BUNDLE_SCHEMA: &str = "phoxal/bundle/v0";
-
-pub(super) const PROVENANCE_SCHEMA: &str = BUNDLE_SCHEMA;
-
 pub(super) const MODEL_ASSET_PREFIX: &str = "assets/";
 
 pub(super) const SOURCE_PREFIX: &str = "source/";
@@ -36,27 +32,23 @@ impl BundleFacts {
             return Err(format!("bundle {} is not a directory", root.display()));
         }
         let manifest = read_json::<BundleManifest>(&root.join("manifest.json"), "bundle manifest")?;
-        if manifest.schema != BUNDLE_SCHEMA {
-            return Err(format!(
-                "bundle manifest schema is {}, expected {BUNDLE_SCHEMA}",
-                manifest.schema
-            ));
-        }
+        let BundleManifest::V0 {
+            simulation: manifest_simulation,
+            ..
+        } = &manifest;
         let provenance =
             read_json::<BundleProvenance>(&root.join("provenance.json"), "bundle provenance")?;
-        if provenance.schema != PROVENANCE_SCHEMA {
-            return Err(format!(
-                "bundle provenance schema is {}, expected {PROVENANCE_SCHEMA}",
-                provenance.schema
-            ));
-        }
-        if provenance.source_tree.path != "source" {
+        let BundleProvenance::V0 {
+            source_tree: provenance_source_tree,
+            ..
+        } = &provenance;
+        if provenance_source_tree.path != "source" {
             return Err(format!(
                 "bundle source tree path is {}, expected source",
-                provenance.source_tree.path
+                provenance_source_tree.path
             ));
         }
-        let simulation = manifest.simulation.clone();
+        let simulation = manifest_simulation.clone();
         let facts = Self {
             root,
             manifest,
@@ -69,6 +61,10 @@ impl BundleFacts {
     }
 
     pub(super) fn validate_source_tree(&self) -> Result<(), String> {
+        let BundleProvenance::V0 {
+            source_tree: source_tree,
+            ..
+        } = &self.provenance;
         let source_root = self.root.join(SOURCE_PREFIX);
         let source_metadata = fs::symlink_metadata(&source_root).map_err(|error| {
             format!(
@@ -80,7 +76,7 @@ impl BundleFacts {
             return Err("bundle source tree is not a regular non-symlink directory".to_owned());
         }
         let mut paths = BTreeSet::new();
-        for file in &self.provenance.source_tree.files {
+        for file in &source_tree.files {
             validate_relative_path(&file.path, "source file")?;
             if !paths.insert(file.path.as_str()) {
                 return Err(format!("bundle source file {:?} is duplicated", file.path));
@@ -88,26 +84,28 @@ impl BundleFacts {
             let path = regular_file_under(&source_root, Path::new(&file.path), &file.path)?;
             verify_digest(&path, file.bytes, &file.sha256)?;
         }
-        let digest = digest_source_files(&self.provenance.source_tree.files);
-        if digest != self.provenance.source_tree.digest {
+        let digest = digest_source_files(&source_tree.files);
+        if digest != source_tree.digest {
             return Err(format!(
                 "bundle source closure digest {} does not match staged files {}",
-                self.provenance.source_tree.digest, digest
+                source_tree.digest, digest
             ));
         }
         Ok(())
     }
 
     pub(super) fn validate_model_closure(&self) -> Result<(), String> {
-        let model = self
-            .provenance
-            .model
+        let BundleProvenance::V0 {
+            model: bundle_model,
+            model_closure: bundle_model_closure,
+            ..
+        } = &self.provenance;
+        let model = bundle_model
             .as_ref()
             .ok_or_else(|| "bundle provenance has no authored model".to_owned())?;
-        let closure =
-            self.provenance.model_closure.as_ref().ok_or_else(|| {
-                "bundle provenance has no closed model/resource closure".to_owned()
-            })?;
+        let closure = bundle_model_closure
+            .as_ref()
+            .ok_or_else(|| "bundle provenance has no closed model/resource closure".to_owned())?;
         if closure.resources.is_empty() {
             return Err("bundle model closure has no resources".to_owned());
         }
@@ -174,10 +172,13 @@ impl BundleFacts {
     }
 
     pub(super) fn root_closed_model(&self) -> Result<ClosedModel, String> {
-        let closure =
-            self.provenance.model_closure.as_ref().ok_or_else(|| {
-                "bundle provenance has no closed model/resource closure".to_owned()
-            })?;
+        let BundleProvenance::V0 {
+            model_closure: bundle_model_closure,
+            ..
+        } = &self.provenance;
+        let closure = bundle_model_closure
+            .as_ref()
+            .ok_or_else(|| "bundle provenance has no closed model/resource closure".to_owned())?;
         let entry = closure
             .entry
             .strip_prefix(MODEL_ASSET_PREFIX)
@@ -205,6 +206,10 @@ impl BundleFacts {
         component: &BundleComponent,
         entry: &Path,
     ) -> Result<ClosedModel, String> {
+        let BundleProvenance::V0 {
+            source_tree: bundle_source_tree,
+            ..
+        } = &self.provenance;
         let entry = entry.to_str().ok_or_else(|| {
             format!(
                 "component {} model entry is not valid UTF-8",
@@ -213,9 +218,7 @@ impl BundleFacts {
         })?;
         validate_relative_path(entry, "component model entry")?;
         let prefix = self.component_source_prefix(component, entry)?;
-        let resources = self
-            .provenance
-            .source_tree
+        let resources = bundle_source_tree
             .files
             .iter()
             .filter_map(|file| {
@@ -252,9 +255,12 @@ impl BundleFacts {
         component: &BundleComponent,
         entry: &str,
     ) -> Result<String, String> {
-        let source = self
-            .provenance
-            .sources
+        let BundleProvenance::V0 {
+            sources: bundle_sources,
+            source_tree: bundle_source_tree,
+            ..
+        } = &self.provenance;
+        let source = bundle_sources
             .iter()
             .find(|source| {
                 source.package_id == component.package_id && source.source == component.source
@@ -276,7 +282,7 @@ impl BundleFacts {
                 )
             })?;
         let mut prefixes = BTreeSet::new();
-        for staged_entry in &self.provenance.source_tree.files {
+        for staged_entry in &bundle_source_tree.files {
             if staged_entry.sha256 != source_entry.sha256
                 || staged_entry.bytes != source_entry.bytes
             {
@@ -295,7 +301,7 @@ impl BundleFacts {
                 } else {
                     format!("{prefix}/{}", file.path)
                 };
-                self.provenance.source_tree.files.iter().any(|staged| {
+                bundle_source_tree.files.iter().any(|staged| {
                     staged.path == path
                         && staged.sha256 == file.sha256
                         && staged.bytes == file.bytes
