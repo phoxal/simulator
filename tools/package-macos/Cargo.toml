@@ -1,0 +1,11 @@
+[package]
+name = "phoxal-package-macos"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "AGPL-3.0-only"
+
+[dependencies]
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"

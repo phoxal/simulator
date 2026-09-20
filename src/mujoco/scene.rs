@@ -779,7 +779,7 @@ fn time_matches(actual: f64, expected: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ClosedModel, Resource};
+    use crate::mujoco::{ActuatorMode, ClosedModel, JointKind, Resource};
 
     #[cfg(feature = "native")]
     const FIXTURE: &str = r#"
@@ -900,10 +900,7 @@ mod tests {
         let body_info = model.body_info(body).unwrap();
         assert_eq!(body_info.position, [0.0, 0.0, 1.0]);
         let joint = model.joint("hinge").unwrap().unwrap();
-        assert_eq!(
-            model.joint_info(joint).unwrap().kind,
-            crate::JointKind::Hinge
-        );
+        assert_eq!(model.joint_info(joint).unwrap().kind, JointKind::Hinge);
         let actuator = model.actuator("hinge_motor").unwrap().unwrap();
         assert_eq!(
             model.actuator_info(actuator).unwrap().control_range,
@@ -911,7 +908,7 @@ mod tests {
         );
         assert_eq!(
             model.actuator_info(actuator).unwrap().mode,
-            crate::ActuatorMode::Torque
+            ActuatorMode::Torque
         );
         let sensor = model.sensor("tip_position").unwrap().unwrap();
         assert_eq!(model.sensor_info(sensor).unwrap().dimension, 3);

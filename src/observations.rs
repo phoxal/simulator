@@ -1,10 +1,10 @@
 //! Sensor payloads and explicit source membership for each native observation cut.
+use crate::mujoco::{Model, StateSnapshot};
 use crate::remote::{NativeProviderError, ProviderSet};
 use phoxal::communication::{
     session::PortKind,
     simulation::{Observation, ProductDisposition, ProductMembership},
 };
-use crate::mujoco::{Model, StateSnapshot};
 use prost::{Message, Name};
 use sha2::{Digest, Sha256};
 

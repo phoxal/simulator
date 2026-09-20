@@ -7,7 +7,7 @@ use crate::mujoco::{Model, Workspace};
 #[test]
 fn native_camera_renders_rgb_and_metric_depth_from_a_private_workspace() {
     let model = Model::from_file(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/rendering/scene.xml"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mujoco/tests/fixtures/rendering/scene.xml"),
     )
     .expect("rendering fixture model");
     let camera = model

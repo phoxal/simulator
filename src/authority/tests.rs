@@ -124,7 +124,9 @@ impl SimulationTransport for Peer {
             let payload = phoxal_service_motion::ActuatorSetpoint {
                 targets: vec![phoxal_service_motion::ActuatorTarget {
                     actuator_id: "motor".into(),
-                    control: Some(phoxal_service_motion::actuator_target::Control::VelocityRadps(1.0)),
+                    control: Some(
+                        phoxal_service_motion::actuator_target::Control::VelocityRadps(1.0),
+                    ),
                 }],
             }
             .encode_to_vec();
@@ -411,6 +413,7 @@ async fn reset_rotates_timeline_and_requires_new_initial_cut() {
 
 #[tokio::test]
 async fn lost_preparation_and_observation_replies_never_integrate_twice() {
+    use crate::mujoco::{Model, Scene};
     use crate::{
         native_provider::{
             ActuationDeclaration, ActuatorTarget, ComponentProvider, NativeControlMode,
@@ -418,7 +421,6 @@ async fn lost_preparation_and_observation_replies_never_integrate_twice() {
         },
         remote::{ProvenanceInput, RemoteSceneRun},
     };
-    use crate::mujoco::{Model, Scene};
     for lost in [PhaseStatus::Prepared, PhaseStatus::ObservationsAdmitted] {
         let model = Model::from_xml(include_str!("../../tests/fixtures/motor.xml")).unwrap();
         let provider = ComponentProvider::new(

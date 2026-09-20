@@ -1,6 +1,8 @@
 use crate::bundle::BundleFacts;
 use crate::composition::native_component_prefix;
 use crate::georeference::georeference;
+use crate::mujoco::Model;
+use crate::mujoco::PhysicsQuantum;
 use crate::native_provider::ActuationDeclaration;
 use crate::native_provider::ActuatorTarget;
 use crate::native_provider::Cadence;
@@ -10,16 +12,12 @@ use crate::native_provider::ObservationBinding;
 use crate::remote::ProviderSet;
 use crate::remote::SIMULATION_PROTOCOL;
 use crate::remote::quantum_nanoseconds;
+use phoxal::artifact::bundle::{
+    BundleActuationBinding, BundleSimulation, BundleSimulationProvider,
+};
+use phoxal::artifact::document::{CapabilityDeclaration, NativeTargetKind};
+use phoxal::artifact::{OutputKind, PortKind};
 use phoxal::communication::simulation::ProviderRequirement;
-use crate::mujoco::Model;
-use crate::mujoco::PhysicsQuantum;
-use phoxal_artifact_format::artifact::OutputKind;
-use phoxal_artifact_format::artifact::PortKind;
-use phoxal_artifact_format::bundle::BundleActuationBinding;
-use phoxal_artifact_format::bundle::BundleSimulation;
-use phoxal_artifact_format::bundle::BundleSimulationProvider;
-use phoxal_artifact_format::document::CapabilityDeclaration;
-use phoxal_artifact_format::document::NativeTargetKind;
 use prost::Name;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};

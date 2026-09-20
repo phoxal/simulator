@@ -8,6 +8,9 @@ use super::config::NativeControlMode;
 use super::config::ObservationBinding;
 use super::observations::BoundObservation;
 use crate::cadence::Cadence;
+use crate::mujoco::Model;
+use crate::mujoco::StateSnapshot;
+use crate::mujoco::Workspace;
 use crate::remote::ActuationBinding;
 use crate::remote::NativeProvider;
 use crate::remote::NativeProviderError;
@@ -15,9 +18,6 @@ use crate::remote::ProviderSet;
 use crate::remote::validate_bindings_for_model;
 use phoxal::communication::simulation::Actuation;
 use phoxal::communication::simulation::Observation;
-use crate::mujoco::Model;
-use crate::mujoco::StateSnapshot;
-use crate::mujoco::Workspace;
 use prost::Message;
 use prost::Name;
 use std::collections::BTreeMap;
@@ -341,7 +341,8 @@ impl NativeProvider for ComponentProvider {
                     binding.binding.payload_fqn()
                 )));
             }
-            let setpoint = phoxal_service_motion::ActuatorSetpoint::decode(item.payload.as_slice())?;
+            let setpoint =
+                phoxal_service_motion::ActuatorSetpoint::decode(item.payload.as_slice())?;
             setpoint
                 .validate_for(binding.targets.iter().map(|target| target.wire_id.as_str()))
                 .map_err(|error| NativeProviderError::InvalidActuation(error.to_string()))?;

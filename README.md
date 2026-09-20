@@ -9,7 +9,16 @@ At each boundary, the coordinator obtains the accepted actuator cut, integrates 
 Lost replies are reconciled using the exact retained request and receipt.
 An unknown outcome or required process, capture, or delivery failure ends the run.
 
-## Build
+## Installation boundary
+
+Normal robot projects do not depend on MuJoCo and should not install a native SDK through `cargo-phoxal`.
+`cargo-phoxal` owns selecting, provisioning, and launching a released simulator application, while this repository owns packaging MuJoCo and its licenses inside that application.
+This keeps host-specific native libraries out of robot dependency graphs and gives each simulator release one inspectable native identity.
+
+Signed and notarized simulator releases are not published yet.
+Until they are available, simulator developers must build this application from source and pass its executable to `cargo phoxal` with `--simulator`.
+
+## Build from source
 
 The initial native pairing is `mujoco-rs` 6.0.1 with MuJoCo 3.12.0.
 Install that native distribution and configure its library directory before building:
@@ -22,26 +31,34 @@ cargo build --locked
 
 On macOS, use `DYLD_LIBRARY_PATH` instead of `LD_LIBRARY_PATH`.
 The loader directory must contain the versioned library as well as its unversioned linker name.
+The official MuJoCo 3.12.0 disk image can be used without copying its contents into this repository:
+
+```sh
+mkdir -p .local-mujoco/lib
+ln -s /Volumes/MuJoCo/mujoco.framework/Versions/A/libmujoco.3.12.0.dylib \
+  .local-mujoco/lib/libmujoco.dylib
+export MUJOCO_DYNAMIC_LINK_DIR="$PWD/.local-mujoco/lib"
+export DYLD_LIBRARY_PATH=/Volumes/MuJoCo/mujoco.framework/Versions/A
+cargo build --locked --release
+```
+
+`.local-mujoco/` is local build state and must not be committed.
 Offscreen capture uses CGL on macOS and EGL on Linux; Linux needs an EGL/OpenGL implementation such as Mesa.
 A headless run creates no desktop window.
 
 For a self-contained macOS application, package the built executable with the official native distribution:
 
 ```sh
-python3 scripts/package_macos.py \
-  --binary target/debug/phoxal-simulator-mujoco \
+cargo run --locked -p phoxal-package-macos -- \
+  --binary target/release/phoxal-simulator-mujoco \
   --mujoco-distribution /Volumes/MuJoCo \
-  --version 0.1.0 --output 'target/Phoxal Simulator.app'
+  --version 0.0.0-dev.1 --output 'target/Phoxal Simulator.app'
 ```
 
 The output must be a new directory.
 The application resolves MuJoCo relative to its executable, retains native licenses and library hashes, and checks loading without a library-path environment variable.
 Use `Contents/MacOS/phoxal-simulator-mujoco` inside the application as the `--simulator` path.
 This produces a locally signed development artifact; distribution signing and notarization remain release requirements.
-
-This review checkpoint pins framework Git revision `ca8926c4d22d3988f346c0b2a1ca20c0e7ce9ad5`.
-Its component dependencies select contract libraries with hardware runtime features disabled.
-Registry release and released-artifact acceptance remain open.
 
 ## Run
 
@@ -111,8 +128,8 @@ GNSS is qualified within 100 km of the scene reference; a capture outside that e
 ## Verification
 
 ```sh
-cargo test --locked
-cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --workspace --all-targets
+cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
 The native tests require the same dynamic-library configuration as the executable.

@@ -25,14 +25,14 @@ Run these checks before submitting a change:
 
 ```sh
 cargo fmt --all --check
-cargo test --locked --all-targets
-cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --workspace --all-targets
+cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
 Exercise changed behavior through a real bundle-backed run and retain the command, platform, artifact identity, and result.
 Native rendering checks need a functioning CGL or EGL implementation.
 Test failures and unavailable required contexts are failed qualification, not successful skips.
 A source build does not establish packaged loading, desktop controls, or compatibility with independently released supervisors.
-The macOS packaging script creates a locally signed artifact for host acceptance; it does not claim distribution signing or notarization.
+The macOS packaging tool creates a locally signed artifact for host acceptance; it does not claim distribution signing or notarization.
 
 Do not manually edit generated bindings or the changelog.

@@ -3,8 +3,8 @@
 mod viewport;
 
 use crate::config::Options;
-use eframe::egui;
 use crate::mujoco::{RenderedCamera, ViewCamera};
+use eframe::egui;
 use std::sync::{
     Arc, Mutex,
     mpsc::{self, Receiver, SyncSender},

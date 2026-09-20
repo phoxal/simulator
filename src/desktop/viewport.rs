@@ -1,5 +1,5 @@
-use eframe::egui;
 use crate::mujoco::ViewCamera;
+use eframe::egui;
 
 pub(super) fn show(
     ui: &mut egui::Ui,

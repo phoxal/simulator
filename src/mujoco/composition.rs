@@ -1122,7 +1122,7 @@ mod tests {
     fn native_attach_compiles_prefixed_component_objects() {
         let scene = ClosedModel::from_xml(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/composition/scene.xml"
+            "/src/mujoco/tests/fixtures/composition/scene.xml"
         )))
         .expect("scene artifact");
         let component = component_with_mesh();
@@ -1206,12 +1206,12 @@ mod tests {
     fn independent_compositions_do_not_share_native_children() {
         let scene = ClosedModel::from_xml(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/composition/scene.xml"
+            "/src/mujoco/tests/fixtures/composition/scene.xml"
         )))
         .expect("scene artifact");
         let component = ClosedModel::from_xml(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/composition/component.xml"
+            "/src/mujoco/tests/fixtures/composition/component.xml"
         )))
         .expect("component artifact");
 

@@ -1,9 +1,11 @@
 [workspace]
 resolver = "3"
+members = ["tools/package-macos"]
+default-members = ["."]
 
 [package]
 name = "phoxal-simulator-mujoco"
-version = "0.1.0"
+version = "0.0.0-dev.1"
 edition = "2024"
 rust-version = "1.95"
 license = "AGPL-3.0-only"
@@ -16,10 +18,10 @@ repository = "https://github.com/phoxal/simulator"
 [[bin]]
 name = "phoxal-simulator-mujoco"
 path = "src/main.rs"
-required-features = ["native"]
+required-features = ["rendering"]
 
 [features]
-default = ["native"]
+default = ["rendering"]
 # The native feature is intentionally opt-in so hardware projects and the
 # generic framework can compile without a MuJoCo installation or rendering
 # stack. The simulator binary requires `native` and builds it by default.
@@ -39,53 +41,44 @@ rendering = ["native", "dep:cgl", "dep:glutin"]
 [dependencies]
 # Component contracts this simulator knows how to compose into native scenes.
 phoxal-component-bno085 = {
-    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
-    version = "0.68.0",
+    registry = "phoxal",
+    version = "=0.0.0-dev.1",
     default-features = false,
     optional = true,
 }
 phoxal-component-ddsm115 = {
-    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
-    version = "0.68.0",
+    registry = "phoxal",
+    version = "=0.0.0-dev.1",
     default-features = false,
     optional = true,
 }
 phoxal-component-oak_d_lite = {
-    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
-    version = "0.68.0",
+    registry = "phoxal",
+    version = "=0.0.0-dev.1",
     default-features = false,
     optional = true,
 }
 phoxal-component-vl53l1x = {
-    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
-    version = "0.68.0",
+    registry = "phoxal",
+    version = "=0.0.0-dev.1",
     default-features = false,
     optional = true,
 }
 phoxal-component-zed_f9p = {
-    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
-    version = "0.68.0",
+    registry = "phoxal",
+    version = "=0.0.0-dev.1",
     default-features = false,
     optional = true,
 }
 phoxal = {
-    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
-    version = "=0.68.0",
+    registry = "phoxal",
+    version = "=0.0.0-dev.1",
     default-features = false,
-    features = ["session", "port"],
+    features = ["session", "port", "artifact"],
 }
 phoxal-service-motion = {
-    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
-    version = "0.68.0",
-}
-# Shared inert bundle / artifact format. The simulator's bundle
-# receiver keeps BundleFacts and all admission operations but now
-# imports the records from the canonical owner (the framework's
-# internal/artifact-format crate) instead of the retired compiler
-# crate.
-phoxal-artifact-format = {
-    git = "https://github.com/phoxal/framework.git", rev = "61dd6d19f",
-    version = "0.1.0",
+    registry = "phoxal",
+    version = "=0.0.0-dev.1",
 }
 prost = "0.14.4"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -106,3 +99,6 @@ glutin = { version = "0.32.3", default-features = false, features = ["egl"], opt
 # Source and executable integrity checks must remain practical in debug builds.
 [profile.dev.package.sha2]
 opt-level = 3
+
+[dev-dependencies]
+tempfile = "3"

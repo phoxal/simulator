@@ -8,10 +8,10 @@ use super::geodesy::Georeference;
 use super::geodesy::WGS84_FIRST_ECCENTRICITY_SQUARED;
 use super::geodesy::WGS84_SEMI_MAJOR_AXIS_METERS;
 use super::runtime::ComponentProvider;
+use crate::mujoco::Model;
 use crate::remote::ProviderSet;
 use phoxal::communication::simulation::ProductMembership;
 use phoxal_component_ddsm115 as ddsm115_contract;
-use crate::mujoco::Model;
 
 use std::path::Path;
 
