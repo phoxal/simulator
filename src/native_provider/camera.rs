@@ -1,12 +1,13 @@
 use super::observations::encode_observation;
+use crate::api::__contracts::phoxal::component::oak_d_lite::v1 as oak_contract;
 use crate::mujoco::CameraBinding;
 use crate::mujoco::StateSnapshot;
 use crate::mujoco::Workspace;
 use crate::remote::NativeProviderError;
 use crate::remote::ProviderSet;
 use phoxal::communication::simulation::Observation;
-use phoxal::port::PortSignature;
-use phoxal_component_oak_d_lite as oak_contract;
+use phoxal::contract::MethodDescriptor;
+use phoxal::contract::MethodSignature;
 use prost::Message;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,7 +20,7 @@ pub(super) enum CameraEncoding {
 pub(super) fn encode_camera_observation(
     providers: &ProviderSet,
     service_instance: &str,
-    signature: PortSignature,
+    signature: MethodSignature,
     binding: &CameraBinding,
     render_workspace: Option<&mut Workspace>,
     state: &StateSnapshot,
@@ -29,7 +30,7 @@ pub(super) fn encode_camera_observation(
     let workspace = render_workspace.ok_or_else(|| {
         NativeProviderError::Unsupported(format!(
             "provider {service_instance}/{} has no native renderer workspace",
-            signature.name
+            signature.endpoint
         ))
     })?;
     let rendered = workspace
@@ -49,13 +50,13 @@ pub(super) fn encode_camera_observation(
     .ok_or_else(|| {
         NativeProviderError::InvalidPayload(format!(
             "provider {service_instance}/{} camera resolution overflows payload size",
-            signature.name
+            signature.endpoint
         ))
     })?;
     if data.len() != expected_len {
         return Err(NativeProviderError::InvalidPayload(format!(
             "provider {service_instance}/{} renderer returned {} bytes, expected {expected_len}",
-            signature.name,
+            signature.endpoint,
             data.len()
         )));
     }
@@ -66,13 +67,13 @@ pub(super) fn encode_camera_observation(
     let width_px = u32::try_from(width).map_err(|_| {
         NativeProviderError::InvalidPayload(format!(
             "provider {service_instance}/{} camera width does not fit u32",
-            signature.name
+            signature.endpoint
         ))
     })?;
     let height_px = u32::try_from(height).map_err(|_| {
         NativeProviderError::InvalidPayload(format!(
             "provider {service_instance}/{} camera height does not fit u32",
-            signature.name
+            signature.endpoint
         ))
     })?;
     let frame = oak_contract::CameraFrame {
@@ -103,7 +104,9 @@ pub(super) fn encode_depth_observation(
     let workspace = render_workspace.ok_or_else(|| {
         NativeProviderError::Unsupported(format!(
             "provider {service_instance}/{} has no native renderer workspace",
-            oak_contract::ports::DEPTH.name()
+            oak_contract::oak_d_lite::methods::DEPTH
+                .signature()
+                .endpoint
         ))
     })?;
     let rendered = workspace
@@ -119,13 +122,17 @@ pub(super) fn encode_depth_observation(
     let expected_len = width.checked_mul(height).ok_or_else(|| {
         NativeProviderError::InvalidPayload(format!(
             "provider {service_instance}/{} camera resolution overflows depth payload size",
-            oak_contract::ports::DEPTH.name()
+            oak_contract::oak_d_lite::methods::DEPTH
+                .signature()
+                .endpoint
         ))
     })?;
     if depth_mm.len() != expected_len {
         return Err(NativeProviderError::InvalidPayload(format!(
             "provider {service_instance}/{} renderer returned {} depth values, expected {expected_len}",
-            oak_contract::ports::DEPTH.name(),
+            oak_contract::oak_d_lite::methods::DEPTH
+                .signature()
+                .endpoint,
             depth_mm.len()
         )));
     }
@@ -133,13 +140,17 @@ pub(super) fn encode_depth_observation(
         width_px: u32::try_from(width).map_err(|_| {
             NativeProviderError::InvalidPayload(format!(
                 "provider {service_instance}/{} camera width does not fit u32",
-                oak_contract::ports::DEPTH.name()
+                oak_contract::oak_d_lite::methods::DEPTH
+                    .signature()
+                    .endpoint
             ))
         })?,
         height_px: u32::try_from(height).map_err(|_| {
             NativeProviderError::InvalidPayload(format!(
                 "provider {service_instance}/{} camera height does not fit u32",
-                oak_contract::ports::DEPTH.name()
+                oak_contract::oak_d_lite::methods::DEPTH
+                    .signature()
+                    .endpoint
             ))
         })?,
         depth_mm,
@@ -147,7 +158,7 @@ pub(super) fn encode_depth_observation(
     encode_observation(
         providers,
         service_instance,
-        oak_contract::ports::DEPTH.signature(),
+        oak_contract::oak_d_lite::methods::DEPTH.signature(),
         state,
         quantum_ns,
         frame.encode_to_vec(),

@@ -3,6 +3,11 @@ use super::camera::CameraEncoding;
 use super::camera::encode_camera_observation;
 use super::camera::encode_depth_observation;
 use super::geodesy::Georeference;
+use crate::api::__contracts::phoxal::component::bno085::v1 as bno085_contract;
+use crate::api::__contracts::phoxal::component::ddsm115::v1 as ddsm115_contract;
+use crate::api::__contracts::phoxal::component::oak_d_lite::v1 as oak_contract;
+use crate::api::__contracts::phoxal::component::vl53l1x::v1 as vl53l1x_contract;
+use crate::api::__contracts::phoxal::component::zed_f9p::v1 as zed_contract;
 use crate::mujoco::CameraBinding;
 use crate::mujoco::Model;
 use crate::mujoco::SensorBinding;
@@ -12,12 +17,8 @@ use crate::mujoco::Workspace;
 use crate::remote::NativeProviderError;
 use crate::remote::ProviderSet;
 use phoxal::communication::simulation::Observation;
-use phoxal::port::PortSignature;
-use phoxal_component_bno085 as bno085_contract;
-use phoxal_component_ddsm115 as ddsm115_contract;
-use phoxal_component_oak_d_lite as oak_contract;
-use phoxal_component_vl53l1x as vl53l1x_contract;
-use phoxal_component_zed_f9p as zed_contract;
+use phoxal::contract::MethodDescriptor;
+use phoxal::contract::MethodSignature;
 use prost::Message;
 
 #[derive(Clone, Debug)]
@@ -139,13 +140,16 @@ impl BoundObservation {
                 };
                 let mut observations = Vec::new();
                 if providers
-                    .get(service_instance, bno085_contract::ports::IMU.name())
+                    .get(
+                        service_instance,
+                        bno085_contract::bno085::methods::IMU.signature().endpoint,
+                    )
                     .is_some()
                 {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        bno085_contract::ports::IMU.signature(),
+                        bno085_contract::bno085::methods::IMU.signature(),
                         state,
                         quantum_ns,
                         imu.encode_to_vec(),
@@ -154,27 +158,34 @@ impl BoundObservation {
                 if providers
                     .get(
                         service_instance,
-                        bno085_contract::ports::ACCELEROMETER.name(),
+                        bno085_contract::bno085::methods::ACCELEROMETER
+                            .signature()
+                            .endpoint,
                     )
                     .is_some()
                 {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        bno085_contract::ports::ACCELEROMETER.signature(),
+                        bno085_contract::bno085::methods::ACCELEROMETER.signature(),
                         state,
                         quantum_ns,
                         accel.encode_to_vec(),
                     )?);
                 }
                 if providers
-                    .get(service_instance, bno085_contract::ports::GYROSCOPE.name())
+                    .get(
+                        service_instance,
+                        bno085_contract::bno085::methods::GYROSCOPE
+                            .signature()
+                            .endpoint,
+                    )
                     .is_some()
                 {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        bno085_contract::ports::GYROSCOPE.signature(),
+                        bno085_contract::bno085::methods::GYROSCOPE.signature(),
                         state,
                         quantum_ns,
                         gyro.encode_to_vec(),
@@ -188,7 +199,9 @@ impl BoundObservation {
             } => Ok(vec![crate::observations::encode_encoder_observation(
                 providers,
                 service_instance,
-                ddsm115_contract::ports::ENCODER.name(),
+                ddsm115_contract::ddsm115::methods::ENCODER
+                    .signature()
+                    .endpoint,
                 joint_id,
                 model,
                 state,
@@ -240,39 +253,52 @@ impl BoundObservation {
                 };
                 let mut observations = Vec::new();
                 if providers
-                    .get(service_instance, oak_contract::ports::IMU.name())
+                    .get(
+                        service_instance,
+                        oak_contract::oak_d_lite::methods::IMU.signature().endpoint,
+                    )
                     .is_some()
                 {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        oak_contract::ports::IMU.signature(),
+                        oak_contract::oak_d_lite::methods::IMU.signature(),
                         state,
                         quantum_ns,
                         imu.encode_to_vec(),
                     )?);
                 }
                 if providers
-                    .get(service_instance, oak_contract::ports::ACCELEROMETER.name())
+                    .get(
+                        service_instance,
+                        oak_contract::oak_d_lite::methods::ACCELEROMETER
+                            .signature()
+                            .endpoint,
+                    )
                     .is_some()
                 {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        oak_contract::ports::ACCELEROMETER.signature(),
+                        oak_contract::oak_d_lite::methods::ACCELEROMETER.signature(),
                         state,
                         quantum_ns,
                         accel.encode_to_vec(),
                     )?);
                 }
                 if providers
-                    .get(service_instance, oak_contract::ports::GYROSCOPE.name())
+                    .get(
+                        service_instance,
+                        oak_contract::oak_d_lite::methods::GYROSCOPE
+                            .signature()
+                            .endpoint,
+                    )
                     .is_some()
                 {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        oak_contract::ports::GYROSCOPE.signature(),
+                        oak_contract::oak_d_lite::methods::GYROSCOPE.signature(),
                         state,
                         quantum_ns,
                         gyro.encode_to_vec(),
@@ -296,7 +322,7 @@ impl BoundObservation {
                 Ok(vec![encode_observation(
                     providers,
                     service_instance,
-                    zed_contract::ports::GNSS.signature(),
+                    zed_contract::zed_f9p::methods::GNSS.signature(),
                     state,
                     quantum_ns,
                     sample.encode_to_vec(),
@@ -308,7 +334,7 @@ impl BoundObservation {
             } => Ok(vec![encode_camera_observation(
                 providers,
                 service_instance,
-                oak_contract::ports::LEFT_MONO.signature(),
+                oak_contract::oak_d_lite::methods::LEFT_MONO.signature(),
                 camera,
                 render_workspace,
                 state,
@@ -321,7 +347,7 @@ impl BoundObservation {
             } => Ok(vec![encode_camera_observation(
                 providers,
                 service_instance,
-                oak_contract::ports::RGB.signature(),
+                oak_contract::oak_d_lite::methods::RGB.signature(),
                 camera,
                 render_workspace,
                 state,
@@ -334,7 +360,7 @@ impl BoundObservation {
             } => Ok(vec![encode_camera_observation(
                 providers,
                 service_instance,
-                oak_contract::ports::RIGHT_MONO.signature(),
+                oak_contract::oak_d_lite::methods::RIGHT_MONO.signature(),
                 camera,
                 render_workspace,
                 state,
@@ -390,13 +416,15 @@ pub(super) fn encode_range_observation(
     let workspace = observation_workspace.ok_or_else(|| {
         NativeProviderError::Unsupported(format!(
             "provider {service_instance}/{} has no native observation workspace",
-            vl53l1x_contract::ports::RANGE.name()
+            vl53l1x_contract::vl53l1x::methods::RANGE
+                .signature()
+                .endpoint
         ))
     })?;
     let distance = workspace
         .finite_fov_range(site.native, min_range_m, max_range_m, fov_rad)
         .map_err(|error| NativeProviderError::Unsupported(error.to_string()))?;
-    let sample = vl53l1x_contract::RangeSample {
+    let sample = phoxal::robotics::RangeSample {
         distance_m: distance.unwrap_or(0.0),
         min_range_m,
         max_range_m,
@@ -405,7 +433,7 @@ pub(super) fn encode_range_observation(
     Ok(vec![encode_observation(
         providers,
         service_instance,
-        vl53l1x_contract::ports::RANGE.signature(),
+        vl53l1x_contract::vl53l1x::methods::RANGE.signature(),
         state,
         quantum_ns,
         sample.encode_to_vec(),
@@ -415,13 +443,19 @@ pub(super) fn encode_range_observation(
 pub(super) fn encode_observation(
     providers: &ProviderSet,
     service_instance: &str,
-    signature: PortSignature,
+    signature: MethodSignature,
     state: &StateSnapshot,
     quantum_ns: u64,
     payload: Vec<u8>,
 ) -> Result<Observation, NativeProviderError> {
     require_port(providers, service_instance, signature, Vec::new())?;
-    crate::observations::packet(service_instance, signature.name, state, quantum_ns, payload)
+    crate::observations::packet(
+        service_instance,
+        signature.endpoint,
+        state,
+        quantum_ns,
+        payload,
+    )
 }
 
 pub(super) fn exact_values<'a>(

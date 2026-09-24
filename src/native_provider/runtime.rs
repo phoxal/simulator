@@ -286,7 +286,8 @@ impl NativeProvider for ComponentProvider {
         model: &Model,
         actuation: &[Actuation],
     ) -> Result<Vec<f64>, Self::Error> {
-        let expected_fqn = phoxal_service_motion::ActuatorSetpoint::full_name();
+        let expected_fqn =
+            crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint::full_name();
         if actuation.len() != self.actuations.len() {
             return Err(NativeProviderError::InvalidActuation(format!(
                 "actuation cut has {}, expected {} configured outputs",
@@ -341,11 +342,24 @@ impl NativeProvider for ComponentProvider {
                     binding.binding.payload_fqn()
                 )));
             }
-            let setpoint =
-                phoxal_service_motion::ActuatorSetpoint::decode(item.payload.as_slice())?;
-            setpoint
-                .validate_for(binding.targets.iter().map(|target| target.wire_id.as_str()))
-                .map_err(|error| NativeProviderError::InvalidActuation(error.to_string()))?;
+            let setpoint = crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint::decode(
+                item.payload.as_slice(),
+            )?;
+            let required = binding
+                .targets
+                .iter()
+                .map(|target| target.wire_id.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            let actual = setpoint
+                .targets
+                .iter()
+                .map(|target| target.actuator_id.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            if actual != required || actual.len() != setpoint.targets.len() {
+                return Err(NativeProviderError::InvalidActuation(
+                    "actuation targets do not match configured actuator membership".to_owned(),
+                ));
+            }
             for target in &binding.targets {
                 let wire_target = setpoint
                     .targets
@@ -366,11 +380,11 @@ impl NativeProvider for ComponentProvider {
                 let value = match (target.mode, control) {
                     (
                         NativeControlMode::Torque,
-                        phoxal_service_motion::actuator_target::Control::TorqueNm(value),
+                        crate::api::__contracts::phoxal::motion::v1::actuator_target::Control::TorqueNm(value),
                     )
                     | (
                         NativeControlMode::Velocity,
-                        phoxal_service_motion::actuator_target::Control::VelocityRadps(value),
+                        crate::api::__contracts::phoxal::motion::v1::actuator_target::Control::VelocityRadps(value),
                     ) => *value,
                     (NativeControlMode::Torque, _) => {
                         return Err(NativeProviderError::InvalidActuation(format!(

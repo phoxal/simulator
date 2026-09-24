@@ -1,6 +1,6 @@
 use super::*;
+use crate::api::__contracts::phoxal::component::bno085::v1 as imu;
 use crate::mujoco::Workspace;
-use phoxal_component_bno085 as imu;
 use std::collections::BTreeMap;
 
 fn model(xml: &str) -> Model {
@@ -54,13 +54,13 @@ fn encoder_si_and_bounded_servo_force_survive_direction_and_mount_rotation() {
             &model,
             vec![provider_requirement(
                 "wheel",
-                ddsm115_contract::ports::ENCODER,
+                ddsm115_contract::ddsm115::methods::ENCODER,
             )],
             ObservationBinding::ddsm115_encoder_joint("wheel", "rotor"),
             Some(NativeControlMode::Velocity),
         );
         let force = model
-            .bind_sensor(ddsm115_contract::ports::ENCODER, "force")
+            .bind_sensor(ddsm115_contract::ddsm115::methods::ENCODER, "force")
             .unwrap();
         let mut workspace = Workspace::new(&model).unwrap();
         for direction in [-1.0, 1.0] {
@@ -73,7 +73,7 @@ fn encoder_si_and_bounded_servo_force_survive_direction_and_mount_rotation() {
                 .observations(&model, &workspace.snapshot().unwrap(), 2_000_000)
                 .unwrap();
             let sample =
-                ddsm115_contract::EncoderSample::decode(observations[0].payload.as_slice())
+                phoxal::robotics::EncoderSample::decode(observations[0].payload.as_slice())
                     .unwrap();
             assert!(
                 (sample.position_rad.unwrap() - direction * std::f64::consts::FRAC_PI_2).abs()
@@ -119,7 +119,7 @@ fn imu_mount_and_post_step_specific_force_are_encoded_in_sensor_coordinates() {
         ));
         let mut provider = provider(
             &model,
-            vec![provider_requirement("sensor", imu::ports::IMU)],
+            vec![provider_requirement("sensor", imu::bno085::methods::IMU)],
             ObservationBinding::bno085_at_site(
                 "sensor",
                 "imu",
@@ -166,7 +166,7 @@ fn imu_mount_and_post_step_specific_force_are_encoded_in_sensor_coordinates() {
 
 #[test]
 fn finite_fov_selects_off_axis_nearest_return_and_reports_no_hit() {
-    use phoxal_component_vl53l1x as range;
+    use crate::api::__contracts::phoxal::component::vl53l1x::v1 as range;
     for (angle, wall, expected) in [
         (0.3_f64, true, Some(1.0)),
         (0.8, true, Some(2.0)),
@@ -187,7 +187,10 @@ fn finite_fov_selects_off_axis_nearest_return_and_reports_no_hit() {
         ));
         let mut provider = provider(
             &model,
-            vec![provider_requirement("sensor", range::ports::RANGE)],
+            vec![provider_requirement(
+                "sensor",
+                range::vl53l1x::methods::RANGE,
+            )],
             ObservationBinding::Vl53l1xRange {
                 service_instance: "sensor".into(),
                 native_site: "range".into(),
@@ -201,7 +204,8 @@ fn finite_fov_selects_off_axis_nearest_return_and_reports_no_hit() {
         let observations = provider
             .observations(&model, &workspace.snapshot().unwrap(), 2_000_000)
             .unwrap();
-        let sample = range::RangeSample::decode(observations[0].payload.as_slice()).unwrap();
+        let sample =
+            phoxal::robotics::RangeSample::decode(observations[0].payload.as_slice()).unwrap();
         assert_eq!(sample.valid, expected.is_some());
         assert!(
             (sample.distance_m - expected.unwrap_or(0.0)).abs() < 0.001,
@@ -229,7 +233,7 @@ fn ecef([latitude, longitude, height]: [f64; 3]) -> [f64; 3] {
 
 #[test]
 fn gnss_uses_the_antenna_mount_and_preserves_centimetre_ecef_accuracy() {
-    use phoxal_component_zed_f9p as gnss;
+    use crate::api::__contracts::phoxal::component::zed_f9p::v1 as gnss;
     let model = model(
         r#"<mujoco><option timestep="0.002"/>
         <worldbody><body name="sensor"><site name="antenna" pos="0 0 1"/></body></worldbody></mujoco>"#,
@@ -239,7 +243,7 @@ fn gnss_uses_the_antenna_mount_and_preserves_centimetre_ecef_accuracy() {
     assert!(reference.project([f64::MAX, f64::MAX, f64::MAX]).is_err());
     let mut provider = provider(
         &model,
-        vec![provider_requirement("sensor", gnss::ports::GNSS)],
+        vec![provider_requirement("sensor", gnss::zed_f9p::methods::GNSS)],
         ObservationBinding::zed_f9p("sensor", "antenna", reference),
         None,
     );
@@ -307,7 +311,7 @@ fn gnss_uses_the_antenna_mount_and_preserves_centimetre_ecef_accuracy() {
 
 #[test]
 fn camera_payloads_preserve_calibrated_projection_row_order_and_metric_depth() {
-    use phoxal_component_oak_d_lite as camera;
+    use crate::api::__contracts::phoxal::component::oak_d_lite::v1 as camera;
     let model = model(
         r#"<mujoco>
       <option timestep="0.002"/>
@@ -323,9 +327,9 @@ fn camera_payloads_preserve_calibrated_projection_row_order_and_metric_depth() {
       </worldbody></mujoco>"#,
     );
     let requirements = vec![
-        provider_requirement("camera", camera::ports::RGB),
-        provider_requirement("camera", camera::ports::LEFT_MONO),
-        provider_requirement("camera", camera::ports::DEPTH),
+        provider_requirement("camera", camera::oak_d_lite::methods::RGB),
+        provider_requirement("camera", camera::oak_d_lite::methods::LEFT_MONO),
+        provider_requirement("camera", camera::oak_d_lite::methods::DEPTH),
     ];
     let cadence = requirements
         .iter()

@@ -1,4 +1,3 @@
-use super::binding::wire_kind;
 use super::camera::rgb_to_mono8;
 use super::config::ActuationDeclaration;
 use super::config::ActuatorTarget;
@@ -8,10 +7,11 @@ use super::geodesy::Georeference;
 use super::geodesy::WGS84_FIRST_ECCENTRICITY_SQUARED;
 use super::geodesy::WGS84_SEMI_MAJOR_AXIS_METERS;
 use super::runtime::ComponentProvider;
+use crate::api::__contracts::phoxal::component::ddsm115::v1 as ddsm115_contract;
 use crate::mujoco::Model;
 use crate::remote::ProviderSet;
 use phoxal::communication::simulation::ProductMembership;
-use phoxal_component_ddsm115 as ddsm115_contract;
+use phoxal::contract::MethodDescriptor;
 
 use std::path::Path;
 
@@ -24,7 +24,7 @@ fn ddsm115_model() -> Model {
         .expect("native encoder fixture")
 }
 
-fn provider_requirement<P: phoxal::port::PortDescriptor>(
+fn provider_requirement<P: phoxal::contract::MethodDescriptor>(
     service_instance: &str,
     port: P,
 ) -> ProviderRequirement {
@@ -32,9 +32,9 @@ fn provider_requirement<P: phoxal::port::PortDescriptor>(
     ProviderRequirement {
         rate_microhertz: 500_000_000,
         service_instance: service_instance.to_owned(),
-        port: signature.name.to_owned(),
+        port: signature.endpoint.to_owned(),
         payload_fqn: signature.response.to_owned(),
-        kind: wire_kind(signature.kind) as i32,
+        shape: phoxal::communication::session::MethodShape::Observation as i32,
         input_fqn: signature.request.to_owned(),
     }
 }
@@ -44,7 +44,7 @@ fn component_encoder_reads_native_joint_and_applies_velocity() {
     let model = ddsm115_model();
     let providers = ProviderSet::new(vec![provider_requirement(
         "wheel",
-        ddsm115_contract::ports::ENCODER,
+        ddsm115_contract::ddsm115::methods::ENCODER,
     )])
     .expect("provider requirements");
     let mut provider = ComponentProvider::new(
@@ -77,15 +77,15 @@ fn component_encoder_reads_native_joint_and_applies_velocity() {
         .observations(&model, &state, 2_000_000)
         .expect("encoder observation");
     assert_eq!(observations.len(), 1);
-    let sample = ddsm115_contract::EncoderSample::decode(observations[0].payload.as_slice())
+    let sample = phoxal::robotics::EncoderSample::decode(observations[0].payload.as_slice())
         .expect("encoder payload");
     assert_eq!(sample.position_rad, Some(0.0));
     assert_eq!(sample.velocity_radps, Some(0.0));
 
-    let setpoint = phoxal_service_motion::ActuatorSetpoint {
-        targets: vec![phoxal_service_motion::ActuatorTarget {
+    let setpoint = crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint {
+        targets: vec![crate::api::__contracts::phoxal::motion::v1::ActuatorTarget {
             actuator_id: "wheel__motor".to_owned(),
-            control: Some(phoxal_service_motion::actuator_target::Control::VelocityRadps(3.0)),
+            control: Some(crate::api::__contracts::phoxal::motion::v1::actuator_target::Control::VelocityRadps(3.0)),
         }],
     };
     let controls = provider
@@ -94,7 +94,10 @@ fn component_encoder_reads_native_joint_and_applies_velocity() {
             &[Actuation {
                 membership: Some(ProductMembership {
                     producer: "motion".to_owned(),
-                    port: phoxal_service_motion::ports::ACTUATORS.name().to_owned(),
+                    port: crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS
+                        .signature()
+                        .endpoint
+                        .to_owned(),
                     ..ProductMembership::default()
                 }),
                 valid_until_ns: 2_000_000,

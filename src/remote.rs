@@ -18,7 +18,7 @@ use std::fmt;
 use crate::authority::{
     AuthorityClient, AuthorityClientError, AuthorityState, SimulationTransport,
 };
-use phoxal::communication::session::PortKind;
+use phoxal::communication::session::MethodShape;
 use phoxal::communication::simulation::{
     Actuation, Observation, PhaseStatus, ProductDisposition, ProgressResponse,
     ReleaseAuthorityResponse,
@@ -140,16 +140,13 @@ impl ProviderSet {
             validate_identifier(&requirement.port, "provider port")?;
             validate_fqn(&requirement.payload_fqn, "payload FQN", false)?;
             validate_fqn(&requirement.input_fqn, "input FQN", true)?;
-            let kind = PortKind::try_from(requirement.kind).map_err(|_| {
+            let shape = MethodShape::try_from(requirement.shape).map_err(|_| {
                 ProviderSetError::InvalidKind {
                     service_instance: requirement.service_instance.clone(),
                     port: requirement.port.clone(),
                 }
             })?;
-            if !matches!(
-                kind,
-                PortKind::State | PortKind::Sample | PortKind::Event | PortKind::Stream
-            ) {
+            if shape != MethodShape::Observation {
                 return Err(ProviderSetError::InvalidKind {
                     service_instance: requirement.service_instance.clone(),
                     port: requirement.port.clone(),
@@ -160,7 +157,7 @@ impl ProviderSet {
             left.service_instance
                 .cmp(&right.service_instance)
                 .then_with(|| left.port.cmp(&right.port))
-                .then_with(|| left.kind.cmp(&right.kind))
+                .then_with(|| left.shape.cmp(&right.shape))
                 .then_with(|| left.input_fqn.cmp(&right.input_fqn))
                 .then_with(|| left.payload_fqn.cmp(&right.payload_fqn))
         });
@@ -1354,7 +1351,7 @@ mod provider_tests {
             port: "rgb".into(),
             payload_fqn: "fixture.Frame".into(),
             input_fqn: "google.protobuf.Empty".into(),
-            kind: PortKind::Sample as i32,
+            shape: MethodShape::Observation as i32,
             rate_microhertz,
         }
     }

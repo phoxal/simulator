@@ -1,3 +1,5 @@
+phoxal::api!();
+
 mod authority;
 mod bindings;
 mod bundle;

@@ -1,5 +1,6 @@
 use super::*;
-use phoxal::communication::session::PortKind;
+use phoxal::communication::session::MethodShape;
+use phoxal::contract::MethodDescriptor;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Default)]
@@ -121,18 +122,21 @@ impl SimulationTransport for Peer {
     ) -> SimulationFuture<'_, PrepareBoundaryResponse, String> {
         Box::pin(async move {
             let key = r.transition_key.as_ref().unwrap();
-            let payload = phoxal_service_motion::ActuatorSetpoint {
-                targets: vec![phoxal_service_motion::ActuatorTarget {
+            let payload = crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint {
+                targets: vec![crate::api::__contracts::phoxal::motion::v1::ActuatorTarget {
                     actuator_id: "motor".into(),
                     control: Some(
-                        phoxal_service_motion::actuator_target::Control::VelocityRadps(1.0),
+                        crate::api::__contracts::phoxal::motion::v1::actuator_target::Control::VelocityRadps(1.0),
                     ),
                 }],
             }
             .encode_to_vec();
             let member = ProductMembership {
                 producer: "motion".into(),
-                port: phoxal_service_motion::ports::ACTUATORS.name().into(),
+                port: crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS
+                    .signature()
+                    .endpoint
+                    .into(),
                 producer_incarnation: vec![2; 32],
                 sequence: key.boundary + 1,
                 capture_boundary: key.boundary,
@@ -253,14 +257,15 @@ impl SimulationTransport for Peer {
 }
 
 fn providers() -> ProviderSet {
-    let port = phoxal_component_ddsm115::ports::ENCODER.signature();
+    let port = crate::api::__contracts::phoxal::component::ddsm115::v1::ddsm115::methods::ENCODER
+        .signature();
     ProviderSet::new(vec![ProviderRequirement {
         rate_microhertz: 500_000_000,
         service_instance: "wheel".into(),
-        port: port.name.into(),
+        port: port.endpoint.into(),
         payload_fqn: port.response.into(),
         input_fqn: port.request.into(),
-        kind: PortKind::Sample as i32,
+        shape: MethodShape::Observation as i32,
     }])
     .unwrap()
 }

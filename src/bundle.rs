@@ -1,12 +1,13 @@
 use crate::mujoco::ClosedModel;
 use crate::mujoco::Resource;
 use phoxal::artifact::bundle::{
-    BundleComponent, BundleManifest, BundleProvenance, BundleSimulation, digest_source_files,
+    BundleComponent, BundleExecutable, BundleManifest, BundleModelAssets, BundleSimulation,
+};
+use phoxal::artifact::document::{
+    CapabilityDeclaration, ComponentDocument, ComponentModel, RobotDocument, RobotSection,
 };
 use serde::Deserialize;
-use sha2::Digest;
-use sha2::Sha256;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Component;
 use std::path::Path;
@@ -14,12 +15,14 @@ use std::path::PathBuf;
 
 pub(super) const MODEL_ASSET_PREFIX: &str = "assets/";
 
-pub(super) const SOURCE_PREFIX: &str = "source/";
-
 pub(super) struct BundleFacts {
     pub(super) root: PathBuf,
-    pub(super) manifest: BundleManifest,
-    pub(super) provenance: BundleProvenance,
+    pub(super) robot_id: String,
+    pub(super) robot: RobotSection,
+    pub(super) executables: Vec<BundleExecutable>,
+    pub(super) components: Vec<BundleComponent>,
+    component_sources: BTreeMap<String, String>,
+    pub(super) model: Option<BundleModelAssets>,
     pub(super) simulation: Option<BundleSimulation>,
 }
 
@@ -33,171 +36,71 @@ impl BundleFacts {
         }
         let manifest = read_json::<BundleManifest>(&root.join("manifest.json"), "bundle manifest")?;
         let BundleManifest::V0 {
-            simulation: manifest_simulation,
+            robot_id,
+            executables,
+            components,
+            component_sources,
+            model,
+            simulation,
             ..
-        } = &manifest;
-        let provenance =
-            read_json::<BundleProvenance>(&root.join("provenance.json"), "bundle provenance")?;
-        let BundleProvenance::V0 {
-            source_tree: provenance_source_tree,
-            ..
-        } = &provenance;
-        if provenance_source_tree.path != "source" {
-            return Err(format!(
-                "bundle source tree path is {}, expected source",
-                provenance_source_tree.path
-            ));
-        }
-        let simulation = manifest_simulation.clone();
+        } = manifest;
+        let document_path = root.join("robot.yaml");
+        regular_file(&document_path, "robot.yaml")?;
+        let document: RobotDocument = serde_yaml::from_slice(
+            &fs::read(&document_path)
+                .map_err(|error| format!("cannot read robot.yaml: {error}"))?,
+        )
+        .map_err(|error| format!("cannot parse robot.yaml: {error}"))?;
+        let RobotDocument::V0 { robot, .. } = document;
         let facts = Self {
             root,
-            manifest,
-            provenance,
+            robot_id,
+            robot,
+            executables,
+            components,
+            component_sources,
+            model,
             simulation,
         };
-        facts.validate_source_tree()?;
-        facts.validate_model_closure()?;
+        if facts.model.is_some() {
+            facts.root_closed_model()?;
+        }
         Ok(facts)
     }
 
-    pub(super) fn validate_source_tree(&self) -> Result<(), String> {
-        let BundleProvenance::V0 {
-            source_tree: source_tree,
-            ..
-        } = &self.provenance;
-        let source_root = self.root.join(SOURCE_PREFIX);
-        let source_metadata = fs::symlink_metadata(&source_root).map_err(|error| {
-            format!(
-                "cannot inspect bundle source tree {}: {error}",
-                source_root.display()
-            )
-        })?;
-        if source_metadata.file_type().is_symlink() || !source_metadata.is_dir() {
-            return Err("bundle source tree is not a regular non-symlink directory".to_owned());
-        }
-        let mut paths = BTreeSet::new();
-        for file in &source_tree.files {
-            validate_relative_path(&file.path, "source file")?;
-            if !paths.insert(file.path.as_str()) {
-                return Err(format!("bundle source file {:?} is duplicated", file.path));
-            }
-            let path = regular_file_under(&source_root, Path::new(&file.path), &file.path)?;
-            verify_digest(&path, file.bytes, &file.sha256)?;
-        }
-        let digest = digest_source_files(&source_tree.files);
-        if digest != source_tree.digest {
-            return Err(format!(
-                "bundle source closure digest {} does not match staged files {}",
-                source_tree.digest, digest
-            ));
-        }
-        Ok(())
-    }
-
-    pub(super) fn validate_model_closure(&self) -> Result<(), String> {
-        let BundleProvenance::V0 {
-            model: bundle_model,
-            model_closure: bundle_model_closure,
-            ..
-        } = &self.provenance;
-        let model = bundle_model
+    pub(super) fn root_closed_model(&self) -> Result<ClosedModel, String> {
+        let model = self
+            .model
             .as_ref()
-            .ok_or_else(|| "bundle provenance has no authored model".to_owned())?;
-        let closure = bundle_model_closure
-            .as_ref()
-            .ok_or_else(|| "bundle provenance has no closed model/resource closure".to_owned())?;
-        if closure.resources.is_empty() {
-            return Err("bundle model closure has no resources".to_owned());
+            .ok_or_else(|| "bundle has no robot model".to_owned())?;
+        let entry = model
+            .entry
+            .strip_prefix(MODEL_ASSET_PREFIX)
+            .ok_or_else(|| format!("model entry {} is outside assets/", model.entry))?;
+        validate_relative_path(entry, "model entry")?;
+        if !model
+            .resources
+            .iter()
+            .any(|resource| resource == &model.entry)
+        {
+            return Err(format!("bundle model entry {} is not staged", model.entry));
         }
         let mut names = BTreeSet::new();
-        for resource in &closure.resources {
-            let relative = resource
-                .path
+        let mut resources = Vec::new();
+        for resource in &model.resources {
+            let name = resource
                 .strip_prefix(MODEL_ASSET_PREFIX)
-                .ok_or_else(|| format!("model resource {} is outside assets/", resource.path))?;
-            validate_relative_path(relative, "model resource")?;
-            if !names.insert(relative.to_owned()) {
-                return Err(format!("bundle model resource {relative:?} is duplicated"));
+                .ok_or_else(|| format!("model resource {resource} is outside assets/"))?;
+            validate_relative_path(name, "model resource")?;
+            if !names.insert(name.to_owned()) {
+                return Err(format!("bundle model resource {name:?} is duplicated"));
             }
-            let path = regular_file_under(
-                &self.root.join("assets"),
-                Path::new(relative),
-                &resource.path,
-            )?;
-            verify_digest(&path, resource.bytes, &resource.sha256)?;
+            let path = regular_file_under(&self.root.join("assets"), Path::new(name), resource)?;
+            let bytes = fs::read(path)
+                .map_err(|error| format!("cannot read model resource {resource}: {error}"))?;
+            resources
+                .push(Resource::new(name.to_owned(), bytes).map_err(|error| error.to_string())?);
         }
-        let entry = closure
-            .entry
-            .strip_prefix(MODEL_ASSET_PREFIX)
-            .ok_or_else(|| format!("model entry {} is outside assets/", closure.entry))?;
-        validate_relative_path(entry, "model entry")?;
-        if !names.contains(entry) {
-            return Err(format!("bundle model entry {entry:?} is not staged"));
-        }
-        let entry_resource = closure
-            .resources
-            .iter()
-            .find(|resource| resource.path == closure.entry)
-            .ok_or_else(|| format!("bundle model closure is missing entry {}", closure.entry))?;
-        if entry_resource.sha256 != model.sha256 || entry_resource.bytes != model.bytes {
-            return Err(format!(
-                "bundle model source {} differs from staged closure entry {}",
-                model.path, closure.entry
-            ));
-        }
-        let resources = closure
-            .resources
-            .iter()
-            .map(|resource| {
-                let name = resource
-                    .path
-                    .strip_prefix(MODEL_ASSET_PREFIX)
-                    .expect("model resource was validated above")
-                    .to_owned();
-                let bytes = fs::read(self.root.join(&resource.path)).map_err(|error| {
-                    format!("cannot read model resource {}: {error}", resource.path)
-                })?;
-                Resource::new(name, bytes).map_err(|error| error.to_string())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let closed = ClosedModel::new(entry, resources).map_err(|error| error.to_string())?;
-        if closed.digest_hex() != closure.digest {
-            return Err(format!(
-                "bundle model closure digest {} does not match staged resources {}",
-                closure.digest,
-                closed.digest_hex()
-            ));
-        }
-        Ok(())
-    }
-
-    pub(super) fn root_closed_model(&self) -> Result<ClosedModel, String> {
-        let BundleProvenance::V0 {
-            model_closure: bundle_model_closure,
-            ..
-        } = &self.provenance;
-        let closure = bundle_model_closure
-            .as_ref()
-            .ok_or_else(|| "bundle provenance has no closed model/resource closure".to_owned())?;
-        let entry = closure
-            .entry
-            .strip_prefix(MODEL_ASSET_PREFIX)
-            .ok_or_else(|| format!("model entry {} is outside assets/", closure.entry))?;
-        let resources = closure
-            .resources
-            .iter()
-            .map(|resource| {
-                let name = resource
-                    .path
-                    .strip_prefix(MODEL_ASSET_PREFIX)
-                    .ok_or_else(|| format!("model resource {} is outside assets/", resource.path))?
-                    .to_owned();
-                let bytes = fs::read(self.root.join(&resource.path)).map_err(|error| {
-                    format!("cannot read model resource {}: {error}", resource.path)
-                })?;
-                Resource::new(name, bytes).map_err(|error| error.to_string())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         ClosedModel::new(entry, resources).map_err(|error| error.to_string())
     }
 
@@ -206,10 +109,6 @@ impl BundleFacts {
         component: &BundleComponent,
         entry: &Path,
     ) -> Result<ClosedModel, String> {
-        let BundleProvenance::V0 {
-            source_tree: bundle_source_tree,
-            ..
-        } = &self.provenance;
         let entry = entry.to_str().ok_or_else(|| {
             format!(
                 "component {} model entry is not valid UTF-8",
@@ -217,112 +116,93 @@ impl BundleFacts {
             )
         })?;
         validate_relative_path(entry, "component model entry")?;
-        let prefix = self.component_source_prefix(component, entry)?;
-        let resources = bundle_source_tree
-            .files
-            .iter()
-            .filter_map(|file| {
-                let relative = file.path.strip_prefix(&prefix)?;
-                let relative = relative.strip_prefix('/')?;
-                Some((relative.to_owned(), file))
-            })
-            .filter(|(relative, _)| !relative.is_empty())
-            .map(|(relative, file)| {
-                validate_relative_path(&relative, "component resource")?;
-                let path = regular_file_under(
-                    &self.root.join(SOURCE_PREFIX),
-                    Path::new(&file.path),
-                    &file.path,
-                )?;
-                verify_digest(&path, file.bytes, &file.sha256)?;
-                let bytes = fs::read(&path).map_err(|error| {
-                    format!("cannot read component resource {}: {error}", file.path)
-                })?;
-                Resource::new(relative, bytes).map_err(|error| error.to_string())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let relative = self
+            .component_sources
+            .get(&component.instance)
+            .ok_or_else(|| {
+                format!(
+                    "component {} has no staged model source",
+                    component.instance
+                )
+            })?;
+        validate_relative_path(relative, "component source")?;
+        let source_root = self.root.join(relative);
+        let metadata = fs::symlink_metadata(&source_root).map_err(|error| {
+            format!(
+                "cannot inspect component source {}: {error}",
+                source_root.display()
+            )
+        })?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(format!(
+                "component source {} is not a regular directory",
+                source_root.display()
+            ));
+        }
+        let mut resources = Vec::new();
+        collect_resources(&source_root, &source_root, &mut resources)?;
         if !resources.iter().any(|resource| resource.name() == entry) {
             return Err(format!(
-                "component {} source closure has no {}",
-                component.instance, entry
+                "component {} source has no {entry}",
+                component.instance
             ));
         }
         ClosedModel::new(entry, resources).map_err(|error| error.to_string())
     }
+}
 
-    pub(super) fn component_source_prefix(
-        &self,
-        component: &BundleComponent,
-        entry: &str,
-    ) -> Result<String, String> {
-        let BundleProvenance::V0 {
-            sources: bundle_sources,
-            source_tree: bundle_source_tree,
-            ..
-        } = &self.provenance;
-        let source = bundle_sources
-            .iter()
-            .find(|source| {
-                source.package_id == component.package_id && source.source == component.source
-            })
-            .ok_or_else(|| {
-                format!(
-                    "component {} has no exact source provenance for package {}",
-                    component.instance, component.package_id
-                )
-            })?;
-        let source_entry = source
-            .files
-            .iter()
-            .find(|file| file.path == entry)
-            .ok_or_else(|| {
-                format!(
-                    "component {} source record has no model entry {}",
-                    component.instance, entry
-                )
-            })?;
-        let mut prefixes = BTreeSet::new();
-        for staged_entry in &bundle_source_tree.files {
-            if staged_entry.sha256 != source_entry.sha256
-                || staged_entry.bytes != source_entry.bytes
-            {
-                continue;
-            }
-            let Some(prefix) = staged_entry
-                .path
-                .strip_suffix(&format!("/{entry}"))
-                .or_else(|| (staged_entry.path == entry).then_some(""))
-            else {
-                continue;
-            };
-            let matches_source = source.files.iter().all(|file| {
-                let path = if prefix.is_empty() {
-                    file.path.clone()
-                } else {
-                    format!("{prefix}/{}", file.path)
-                };
-                bundle_source_tree.files.iter().any(|staged| {
-                    staged.path == path
-                        && staged.sha256 == file.sha256
-                        && staged.bytes == file.bytes
-                })
-            });
-            if matches_source {
-                prefixes.insert(prefix.to_owned());
-            }
+fn collect_resources(
+    root: &Path,
+    directory: &Path,
+    resources: &mut Vec<Resource>,
+) -> Result<(), String> {
+    for entry in fs::read_dir(directory).map_err(|error| {
+        format!(
+            "cannot read component source {}: {error}",
+            directory.display()
+        )
+    })? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "cannot inspect component resource {}: {error}",
+                path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "component resource {} is a symbolic link",
+                path.display()
+            ));
         }
-        match prefixes.len() {
-            1 => Ok(prefixes.into_iter().next().expect("one prefix")),
-            0 => Err(format!(
-                "component {} source closure is not present under its exact package identity",
-                component.instance
-            )),
-            _ => Err(format!(
-                "component {} source closure has ambiguous staged package locations",
-                component.instance
-            )),
+        if metadata.is_dir() {
+            collect_resources(root, &path, resources)?;
+        } else if metadata.is_file() {
+            let relative = path.strip_prefix(root).map_err(|error| error.to_string())?;
+            let name = relative.to_str().ok_or_else(|| {
+                format!("component resource {} is not valid UTF-8", path.display())
+            })?;
+            let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+            resources
+                .push(Resource::new(name.to_owned(), bytes).map_err(|error| error.to_string())?);
         }
     }
+    Ok(())
+}
+
+pub(super) fn component_definition(
+    document: &ComponentDocument,
+) -> (
+    &ComponentModel,
+    &std::collections::BTreeMap<String, CapabilityDeclaration>,
+) {
+    let ComponentDocument::V0 {
+        model,
+        capabilities,
+        ..
+    } = document;
+    (model, capabilities)
 }
 
 pub(super) fn read_json<T: for<'de> Deserialize<'de>>(
@@ -382,24 +262,6 @@ pub(super) fn regular_file_under(
         }
     }
     Ok(path)
-}
-
-pub(super) fn verify_digest(
-    path: &Path,
-    expected_bytes: u64,
-    expected_sha256: &str,
-) -> Result<(), String> {
-    let bytes =
-        fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    let actual_bytes = bytes.len() as u64;
-    let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
-    if actual_bytes != expected_bytes || actual_sha256 != expected_sha256 {
-        return Err(format!(
-            "bundle file {} has {actual_bytes} bytes and SHA-256 {actual_sha256}, expected {expected_bytes} bytes and {expected_sha256}",
-            path.display()
-        ));
-    }
-    Ok(())
 }
 
 pub(super) fn validate_relative_path(value: &str, field: &str) -> Result<(), String> {

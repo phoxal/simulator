@@ -184,7 +184,7 @@ async fn execute_remote_run(
     }
     let viewport_model = model.clone();
     let scene = Scene::new(model).map_err(|error| error.to_string())?;
-    let robot_bundle_identity = bundle.provenance.source_closure_sha256.clone();
+    let robot_bundle_identity = bundle.robot_id.clone();
     let provenance = ProvenanceInput::new(robot_bundle_identity, run_id.to_owned())
         .map_err(|error| error.to_string())?;
     let native_bindings = provider.binding_evidence();
@@ -212,7 +212,7 @@ async fn execute_remote_run(
             return Err(error);
         }
     };
-    let joint_name = format!("{}__base_freejoint", bundle.manifest.robot_id);
+    let joint_name = format!("{}__base_freejoint", bundle.robot_id);
     let joint = viewport_model
         .joint(&joint_name)
         .map_err(|error| error.to_string())?

@@ -2,7 +2,7 @@
 use crate::mujoco::{Model, StateSnapshot};
 use crate::remote::{NativeProviderError, ProviderSet};
 use phoxal::communication::{
-    session::PortKind,
+    session::MethodShape,
     simulation::{Observation, ProductDisposition, ProductMembership},
 };
 use prost::{Message, Name};
@@ -55,9 +55,9 @@ pub fn encode_encoder_observation(
             "no immutable provider requirement for {service_instance}/{port}"
         ))
     })?;
-    let kind = PortKind::try_from(requirement.kind)
-        .map_err(|_| NativeProviderError::InvalidPayload("provider kind is unknown".to_owned()))?;
-    if kind != PortKind::Sample
+    let shape = MethodShape::try_from(requirement.shape)
+        .map_err(|_| NativeProviderError::InvalidPayload("provider shape is unknown".to_owned()))?;
+    if shape != MethodShape::Observation
         || requirement.payload_fqn != phoxal::robotics::EncoderSample::full_name()
     {
         return Err(NativeProviderError::InvalidPayload(

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use mujoco_rs::prelude::{MjModel, MjtBias, MjtGain, MjtJoint, MjtObj, MjtSensor, MjtTrn};
 use mujoco_rs::wrappers::MjVfs;
-use phoxal::port::{PortDescriptor, PortKind, PortSignature};
+use phoxal::contract::{MethodDescriptor, MethodShape, MethodSignature};
 
 use crate::mujoco::artifact::ClosedModel;
 use crate::mujoco::error::ModelError;
@@ -158,12 +158,12 @@ impl Model {
     /// handle and static range identify the model-local native source. The
     /// caller chooses the explicit native name from the component model; no
     /// name or sensor semantics are inferred from the port string.
-    pub fn bind_sensor<P: PortDescriptor>(
+    pub fn bind_sensor<P: MethodDescriptor>(
         &self,
         port: P,
         native_name: &str,
     ) -> Result<SensorBinding, ModelError> {
-        let signature = binding_signature(port, "sensor", PortKind::Sample)?;
+        let signature = binding_signature(port, "sensor", false)?;
         let native = self
             .sensor(native_name)?
             .ok_or_else(|| missing_binding(signature, "sensor", native_name))?;
@@ -175,12 +175,12 @@ impl Model {
     }
 
     /// Binds a generated sample port to one model-authored native camera.
-    pub fn bind_camera<P: PortDescriptor>(
+    pub fn bind_camera<P: MethodDescriptor>(
         &self,
         port: P,
         native_name: &str,
     ) -> Result<CameraBinding, ModelError> {
-        let signature = binding_signature(port, "camera", PortKind::Sample)?;
+        let signature = binding_signature(port, "camera", false)?;
         let native = self
             .camera(native_name)?
             .ok_or_else(|| missing_binding(signature, "camera", native_name))?;
@@ -196,12 +196,12 @@ impl Model {
     /// Sites are used for capabilities whose native output is derived from a
     /// physical frame, such as GNSS antenna position or a finite-FOV range
     /// query, rather than a direct MuJoCo sensor table.
-    pub fn bind_site<P: PortDescriptor>(
+    pub fn bind_site<P: MethodDescriptor>(
         &self,
         port: P,
         native_name: &str,
     ) -> Result<SiteBinding, ModelError> {
-        let signature = binding_signature(port, "site", PortKind::Sample)?;
+        let signature = binding_signature(port, "site", false)?;
         let native = self
             .site(native_name)?
             .ok_or_else(|| missing_binding(signature, "site", native_name))?;
@@ -218,12 +218,12 @@ impl Model {
     /// runtime. The compiled graph supplies its generated producer descriptor
     /// and this explicit binding only associates that descriptor with native
     /// actuation.
-    pub fn bind_actuator<P: PortDescriptor>(
+    pub fn bind_actuator<P: MethodDescriptor>(
         &self,
         port: P,
         native_name: &str,
     ) -> Result<ActuatorBinding, ModelError> {
-        let signature = binding_signature(port, "actuator", PortKind::Setpoint)?;
+        let signature = binding_signature(port, "actuator", true)?;
         let native = self
             .actuator(native_name)?
             .ok_or_else(|| missing_binding(signature, "actuator", native_name))?;
@@ -491,29 +491,30 @@ fn invalid_metadata(field: &'static str, index: usize) -> ModelError {
     }
 }
 
-fn binding_signature<P: PortDescriptor>(
+fn binding_signature<P: MethodDescriptor>(
     port: P,
     native_kind: &'static str,
-    expected: PortKind,
-) -> Result<PortSignature, ModelError> {
-    if P::KIND != expected {
+    requires_lease: bool,
+) -> Result<MethodSignature, ModelError> {
+    let signature = port.signature();
+    if signature.shape != MethodShape::Observation || requires_lease != signature.lease.is_some() {
         return Err(ModelError::InvalidBindingKind {
-            port: port.name(),
-            actual: P::KIND,
+            port: signature.endpoint,
+            actual: signature.shape,
             native_kind,
-            expected,
+            requires_lease,
         });
     }
-    Ok(port.signature())
+    Ok(signature)
 }
 
 fn missing_binding(
-    signature: PortSignature,
+    signature: MethodSignature,
     native_kind: &'static str,
     native_name: &str,
 ) -> ModelError {
     ModelError::MissingBinding {
-        port: signature.name,
+        port: signature.endpoint,
         native_kind,
         native_name: native_name.to_owned(),
     }
@@ -867,7 +868,7 @@ impl SensorKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SensorBinding {
     /// Public generated port identity.
-    pub port: PortSignature,
+    pub port: MethodSignature,
     /// Model-local sensor handle.
     pub native: SensorHandle,
     /// Native data range emitted by this sensor.
@@ -903,7 +904,7 @@ impl SensorBinding {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CameraBinding {
     /// Public generated port identity.
-    pub port: PortSignature,
+    pub port: MethodSignature,
     /// Model-local camera handle.
     pub native: CameraHandle,
     /// Static camera facts.
@@ -914,7 +915,7 @@ pub struct CameraBinding {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SiteBinding {
     /// Public generated port identity.
-    pub port: PortSignature,
+    pub port: MethodSignature,
     /// Model-local site handle.
     pub native: SiteHandle,
     /// Static site facts.
@@ -942,7 +943,7 @@ impl SiteBinding {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ActuatorBinding {
     /// Generated producer/setpoint identity supplied by the compiled graph.
-    pub port: PortSignature,
+    pub port: MethodSignature,
     /// Model-local actuator handle.
     pub native: ActuatorHandle,
     /// Static actuator facts.

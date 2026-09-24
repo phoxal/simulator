@@ -1,4 +1,4 @@
-use crate::bundle::BundleFacts;
+use crate::bundle::{BundleFacts, component_definition};
 use crate::composition::native_component_prefix;
 use crate::georeference::georeference;
 use crate::mujoco::Model;
@@ -16,8 +16,9 @@ use phoxal::artifact::bundle::{
     BundleActuationBinding, BundleSimulation, BundleSimulationProvider,
 };
 use phoxal::artifact::document::{CapabilityDeclaration, NativeTargetKind};
-use phoxal::artifact::{OutputKind, PortKind};
+use phoxal::artifact::{MethodShape, OutputRecord, OutputRole, RuntimeRecord};
 use phoxal::communication::simulation::ProviderRequirement;
+use phoxal::contract::MethodDescriptor;
 use prost::Name;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,7 +33,11 @@ pub(super) struct ProbeProvider {
     pub(super) rate_microhertz: u64,
     pub(super) service_instance: String,
     pub(super) port: String,
-    pub(super) kind: PortKind,
+    pub(super) shape: MethodShape,
+    pub(super) service_fqn: String,
+    pub(super) method: String,
+    pub(super) retained_latest: bool,
+    pub(super) lease_valid_for_ms: Option<u64>,
     pub(super) input_fqn: String,
     pub(super) payload_fqn: String,
 }
@@ -53,14 +58,13 @@ pub(super) struct ProbeFacts {
     pub(super) actuation_bindings: Vec<ProbeActuation>,
 }
 
-pub(super) fn output_observation_kind(kind: OutputKind) -> Option<PortKind> {
-    Some(match kind {
-        OutputKind::State => PortKind::State,
-        OutputKind::Sample => PortKind::Sample,
-        OutputKind::Event => PortKind::Event,
-        OutputKind::Stream => PortKind::Stream,
-        _ => return None,
-    })
+fn runtime_outputs(runtime: &RuntimeRecord) -> impl Iterator<Item = &OutputRecord> {
+    let RuntimeRecord::V0 {
+        transient_outputs,
+        service_outputs,
+        ..
+    } = runtime;
+    transient_outputs.iter().chain(service_outputs)
 }
 
 pub(super) fn probe_contract(bundle: &BundleFacts, model: &Model) -> Result<ProbeContract, String> {
@@ -80,11 +84,13 @@ pub(super) fn probe_contract(bundle: &BundleFacts, model: &Model) -> Result<Prob
                 rate_microhertz: provider.rate_microhertz,
                 service_instance: provider.service_instance.clone(),
                 port: provider.port.clone(),
-                kind: provider.kind,
+                shape: provider.shape,
+                retained_latest: provider.retained_latest,
+                lease_valid_for_ms: provider.lease_valid_for_ms,
                 input_fqn: provider.input_fqn.clone(),
                 payload_fqn: provider.payload_fqn.clone(),
-                service_fqn: String::new(),
-                method: String::new(),
+                service_fqn: provider.service_fqn.clone(),
+                method: provider.method.clone(),
                 max_message_bytes: 0,
                 max_buffered_items: 0,
             })
@@ -108,15 +114,13 @@ pub(super) fn probe_contract(bundle: &BundleFacts, model: &Model) -> Result<Prob
 
 pub(super) fn generated_provider_facts(bundle: &BundleFacts) -> Result<Vec<ProbeProvider>, String> {
     let driver_instances = bundle
-        .manifest
-        .document
         .robot
         .components
         .iter()
         .filter_map(|(instance, selection)| selection.driver.as_ref().map(|_| instance.as_str()))
         .collect::<BTreeSet<_>>();
     let mut providers = Vec::new();
-    for executable in &bundle.manifest.executables {
+    for executable in &bundle.executables {
         if executable.role != "driver" || !driver_instances.contains(executable.instance.as_str()) {
             continue;
         }
@@ -126,13 +130,10 @@ pub(super) fn generated_provider_facts(bundle: &BundleFacts) -> Result<Vec<Probe
                 executable.instance
             )
         })?;
-        for output in artifact
-            .runtime
-            .transient_outputs
-            .iter()
-            .chain(artifact.runtime.service_outputs.iter())
-        {
-            let Some(kind) = output_observation_kind(output.kind) else {
+        for output in runtime_outputs(&artifact.runtime) {
+            let Some(signature) = output.signature.as_ref().filter(|signature| {
+                output.role == OutputRole::Method && signature.shape == MethodShape::Observation
+            }) else {
                 continue;
             };
             let port = output.port.as_ref().ok_or_else(|| {
@@ -141,31 +142,31 @@ pub(super) fn generated_provider_facts(bundle: &BundleFacts) -> Result<Vec<Probe
                     executable.instance
                 )
             })?;
-            let signature = output.signature.as_ref().ok_or_else(|| {
-                format!(
-                    "observation output {}/{} has no generated signature",
-                    executable.instance, port
-                )
-            })?;
             let component = bundle
-                .manifest
                 .components
                 .iter()
                 .find(|component| component.instance == executable.instance)
                 .ok_or_else(|| format!("provider {} has no component", executable.instance))?;
-            let capability = component.definition.capabilities.get(port).ok_or_else(|| {
-                format!(
-                    "provider {}/{} has no declared capability",
-                    executable.instance, port
-                )
-            })?;
+            let capability = component_definition(&component.definition)
+                .1
+                .get(port)
+                .ok_or_else(|| {
+                    format!(
+                        "provider {}/{} has no declared capability",
+                        executable.instance, port
+                    )
+                })?;
             let rate = semantic_number(capability, "publish_rate_hz", &executable.instance)?;
             let cadence = Cadence::new(rate, 1).map_err(|error| error.to_string())?;
             providers.push(ProbeProvider {
                 rate_microhertz: cadence.rate_microhertz(),
                 service_instance: executable.instance.clone(),
                 port: port.clone(),
-                kind,
+                shape: signature.shape,
+                service_fqn: signature.service.clone(),
+                method: signature.method.clone(),
+                retained_latest: signature.retained_latest,
+                lease_valid_for_ms: signature.lease_valid_for_ms,
                 input_fqn: signature.request.clone(),
                 payload_fqn: signature.response.clone(),
             });
@@ -204,17 +205,16 @@ pub(super) fn generated_actuation_facts(
     model: &Model,
 ) -> Result<Vec<ProbeActuation>, String> {
     let mut targets = Vec::new();
-    for (instance, selection) in &bundle.manifest.document.robot.components {
+    for (instance, selection) in &bundle.robot.components {
         if selection.driver.is_none() {
             continue;
         }
         let component = bundle
-            .manifest
             .components
             .iter()
             .find(|component| component.instance == *instance)
             .ok_or_else(|| format!("component {instance} has no resolved bundle record"))?;
-        for (capability_name, capability) in &component.definition.capabilities {
+        for (capability_name, capability) in component_definition(&component.definition).1 {
             if capability.kind != "motor" {
                 continue;
             }
@@ -230,7 +230,10 @@ pub(super) fn generated_actuation_facts(
                 capability_target = capability.target.id
             );
             model
-                .bind_actuator(phoxal_service_motion::ports::ACTUATORS, &native_name)
+                .bind_actuator(
+                    crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS,
+                    &native_name,
+                )
                 .map_err(|error| format!("actuator binding {native_name}: {error}"))?;
             targets.push(format!("{instance}.{capability_name}"));
         }
@@ -244,17 +247,17 @@ pub(super) fn generated_actuation_facts(
         );
     }
     let mut outputs = Vec::new();
-    for executable in &bundle.manifest.executables {
+    for executable in &bundle.executables {
         let Some(artifact) = &executable.artifact else {
             continue;
         };
-        for output in artifact
-            .runtime
-            .transient_outputs
-            .iter()
-            .chain(artifact.runtime.service_outputs.iter())
-        {
-            if output.kind != OutputKind::Setpoint {
+        for output in runtime_outputs(&artifact.runtime) {
+            if output.role != OutputRole::Method
+                || !output.signature.as_ref().is_some_and(|signature| {
+                    signature.shape == MethodShape::Observation
+                        && signature.lease_valid_for_ms.is_some()
+                })
+            {
                 continue;
             }
             let port = output.port.as_deref().ok_or_else(|| {
@@ -269,8 +272,12 @@ pub(super) fn generated_actuation_facts(
                     executable.instance, port
                 )
             })?;
-            if port != phoxal_service_motion::ports::ACTUATORS.name()
-                || signature.response != phoxal_service_motion::ActuatorSetpoint::full_name()
+            if port
+                != crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS
+                    .signature()
+                    .endpoint
+                || signature.response
+                    != crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint::full_name()
             {
                 // Intermediate service intents are ordinary graph traffic.
                 // Only native actuator products belong in the physics input cut.
@@ -312,15 +319,7 @@ pub(super) fn build_provider(
                 service_instance: provider.service_instance.clone(),
                 port: provider.port.clone(),
                 payload_fqn: provider.payload_fqn.clone(),
-                kind: match provider.kind {
-                    PortKind::State => phoxal::communication::session::PortKind::State,
-                    PortKind::Sample => phoxal::communication::session::PortKind::Sample,
-                    PortKind::Event => phoxal::communication::session::PortKind::Event,
-                    PortKind::Stream => phoxal::communication::session::PortKind::Stream,
-                    PortKind::Setpoint => phoxal::communication::session::PortKind::Setpoint,
-                    PortKind::Read => phoxal::communication::session::PortKind::Read,
-                    PortKind::Commands => phoxal::communication::session::PortKind::Commands,
-                } as i32,
+                shape: phoxal::communication::session::MethodShape::Observation as i32,
                 input_fqn: provider.input_fqn.clone(),
             })
         })
@@ -331,8 +330,12 @@ pub(super) fn build_provider(
         .actuation_bindings
         .iter()
         .map(|binding| {
-            if binding.port != phoxal_service_motion::ports::ACTUATORS.name()
-                || binding.payload_fqn != phoxal_service_motion::ActuatorSetpoint::full_name()
+            if binding.port
+                != crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS
+                    .signature()
+                    .endpoint
+                || binding.payload_fqn
+                    != crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint::full_name()
             {
                 return Err(format!(
                     "simulation actuation {}/{} does not use generated motion constants",
@@ -348,14 +351,12 @@ pub(super) fn build_provider(
                             format!("actuator {actuator_id} must identify component.capability")
                         })?;
                     let component = bundle
-                        .manifest
                         .components
                         .iter()
                         .find(|c| c.instance == instance)
                         .ok_or_else(|| format!("actuator {actuator_id} has no component"))?;
-                    let capability = component
-                        .definition
-                        .capabilities
+                    let capability = component_definition(&component.definition)
+                        .1
                         .get(capability_name)
                         .filter(|c| {
                             c.kind == "motor" && c.target.kind == NativeTargetKind::Actuator
@@ -367,7 +368,10 @@ pub(super) fn build_provider(
                         capability.target.id
                     );
                     let native = model
-                        .bind_actuator(phoxal_service_motion::ports::ACTUATORS, &native_name)
+                        .bind_actuator(
+                            crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS,
+                            &native_name,
+                        )
                         .map_err(|error| format!("actuator binding {actuator_id}: {error}"))?;
                     let mode = match native.info.mode {
                         crate::mujoco::ActuatorMode::Torque => NativeControlMode::Torque,
@@ -392,16 +396,14 @@ pub(super) fn build_provider(
         .iter()
         .map(|requirement| {
             let component = bundle
-                .manifest
                 .components
                 .iter()
                 .find(|component| component.instance == requirement.service_instance)
                 .ok_or_else(|| {
                     format!("provider {} has no component", requirement.service_instance)
                 })?;
-            let capability = component
-                .definition
-                .capabilities
+            let capability = component_definition(&component.definition)
+                .1
                 .get(&requirement.port)
                 .ok_or_else(|| {
                     format!("provider {} has no cadence capability", requirement.port)
@@ -434,16 +436,16 @@ pub(super) fn observation_bindings(
     providers: &ProviderSet,
 ) -> Result<Vec<ObservationBinding>, String> {
     let mut bindings = Vec::new();
-    for (instance, component) in &bundle.manifest.document.robot.components {
+    for (instance, component) in &bundle.robot.components {
         if component.driver.is_none() {
             continue;
         }
         let resolved = bundle
-            .manifest
             .components
             .iter()
             .find(|candidate| candidate.instance == *instance)
             .ok_or_else(|| format!("component {instance} has no resolved bundle record"))?;
+        let capabilities = component_definition(&resolved.definition).1;
         let routes = providers
             .requirements()
             .iter()
@@ -465,9 +467,7 @@ pub(super) fn observation_bindings(
         // A fused IMU binds the authored raw signals too. Resolve it before
         // validating the optional raw output routes, independent of map ordering.
         requirements.sort_by_key(|requirement| {
-            resolved
-                .definition
-                .capabilities
+            capabilities
                 .get(&requirement.port)
                 .is_none_or(|capability| capability.kind != "imu")
         });
@@ -475,33 +475,21 @@ pub(super) fn observation_bindings(
             if handled.contains(requirement.port.as_str()) {
                 continue;
             }
-            let capability = resolved
-                .definition
-                .capabilities
-                .get(&requirement.port)
-                .ok_or_else(|| {
-                    format!(
-                        "component {instance} capability {:?} is missing from authored definition",
-                        requirement.port
-                    )
-                })?;
+            let capability = capabilities.get(&requirement.port).ok_or_else(|| {
+                format!(
+                    "component {instance} capability {:?} is missing from authored definition",
+                    requirement.port
+                )
+            })?;
             let native_target = format!("{prefix}{}", capability.target.id);
             match capability.kind.as_str() {
                 "imu" => {
-                    let acceleration = resolved
-                        .definition
-                        .capabilities
-                        .get("accelerometer")
-                        .ok_or_else(|| {
-                            format!("component {instance} IMU has no accelerometer capability")
-                        })?;
-                    let gyroscope = resolved
-                        .definition
-                        .capabilities
-                        .get("gyroscope")
-                        .ok_or_else(|| {
-                            format!("component {instance} IMU has no gyroscope capability")
-                        })?;
+                    let acceleration = capabilities.get("accelerometer").ok_or_else(|| {
+                        format!("component {instance} IMU has no accelerometer capability")
+                    })?;
+                    let gyroscope = capabilities.get("gyroscope").ok_or_else(|| {
+                        format!("component {instance} IMU has no gyroscope capability")
+                    })?;
                     let orientation_sensor =
                         capability_signal(capability, "orientation", instance)?;
                     let accelerometer_sensor =

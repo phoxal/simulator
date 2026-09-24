@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[cfg(feature = "native")]
 use crate::mujoco::ModelIdentity;
 #[cfg(feature = "native")]
-use phoxal::port::PortKind;
+use phoxal::contract::MethodShape;
 
 /// Errors raised while validating a closed MJCF/resource artifact.
 #[derive(Debug, thiserror::Error)]
@@ -123,20 +123,20 @@ pub enum ModelError {
         /// Number of elements in the table.
         length: usize,
     },
-    /// A public port has a semantic kind that cannot be served by the selected
+    /// A public method has a shape or lease that cannot be served by the selected
     /// native object binding.
     #[error(
-        "public port {port:?} has kind {actual:?}; native {native_kind} binding requires {expected:?}"
+        "public method {port:?} has shape {actual:?}; native {native_kind} binding requires observation shape with lease={requires_lease}"
     )]
     InvalidBindingKind {
         /// Public port name.
         port: &'static str,
         /// Actual generated semantic kind.
-        actual: PortKind,
+        actual: MethodShape,
         /// Native object family being selected.
         native_kind: &'static str,
-        /// Required generated semantic kind.
-        expected: PortKind,
+        /// Whether a lease is required for this native binding.
+        requires_lease: bool,
     },
     /// A public port could not be mapped to the named model object.
     #[error("public port {port:?} has no native {native_kind} named {native_name:?}")]

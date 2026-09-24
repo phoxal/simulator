@@ -2,6 +2,11 @@ use super::config::ActuationDeclaration;
 use super::config::NativeControlMode;
 use super::config::ObservationBinding;
 use super::observations::BoundObservation;
+use crate::api::__contracts::phoxal::component::bno085::v1 as bno085_contract;
+use crate::api::__contracts::phoxal::component::ddsm115::v1 as ddsm115_contract;
+use crate::api::__contracts::phoxal::component::oak_d_lite::v1 as oak_contract;
+use crate::api::__contracts::phoxal::component::vl53l1x::v1 as vl53l1x_contract;
+use crate::api::__contracts::phoxal::component::zed_f9p::v1 as zed_contract;
 use crate::mujoco::ActuatorBinding;
 use crate::mujoco::ActuatorMode;
 use crate::mujoco::Model;
@@ -10,12 +15,8 @@ use crate::mujoco::SensorKind;
 use crate::remote::ActuationBinding;
 use crate::remote::NativeProviderError;
 use crate::remote::ProviderSet;
-use phoxal::port::PortSignature;
-use phoxal_component_bno085 as bno085_contract;
-use phoxal_component_ddsm115 as ddsm115_contract;
-use phoxal_component_oak_d_lite as oak_contract;
-use phoxal_component_vl53l1x as vl53l1x_contract;
-use phoxal_component_zed_f9p as zed_contract;
+use phoxal::contract::MethodDescriptor;
+use phoxal::contract::MethodSignature;
 use prost::Name;
 use std::collections::BTreeSet;
 
@@ -91,13 +92,17 @@ pub(super) fn bind_observation(
             validate_text(&service_instance, "BNO085 service instance")?;
             validate_text(&sensor_frame_id, "BNO085 sensor frame")?;
             let orientation =
-                model.bind_sensor(bno085_contract::ports::IMU, &orientation_sensor)?;
-            let accelerometer =
-                model.bind_sensor(bno085_contract::ports::ACCELEROMETER, &accelerometer_sensor)?;
-            let gyroscope =
-                model.bind_sensor(bno085_contract::ports::GYROSCOPE, &gyroscope_sensor)?;
+                model.bind_sensor(bno085_contract::bno085::methods::IMU, &orientation_sensor)?;
+            let accelerometer = model.bind_sensor(
+                bno085_contract::bno085::methods::ACCELEROMETER,
+                &accelerometer_sensor,
+            )?;
+            let gyroscope = model.bind_sensor(
+                bno085_contract::bno085::methods::GYROSCOPE,
+                &gyroscope_sensor,
+            )?;
             let _sensor_site = sensor_site
-                .map(|site| model.bind_site(bno085_contract::ports::IMU, &site))
+                .map(|site| model.bind_site(bno085_contract::bno085::methods::IMU, &site))
                 .transpose()?;
             require_sensor_kind(
                 &orientation,
@@ -114,19 +119,19 @@ pub(super) fn bind_observation(
                 optional_port(
                     providers,
                     &service_instance,
-                    bno085_contract::ports::IMU.signature(),
+                    bno085_contract::bno085::methods::IMU.signature(),
                     vec![orientation_sensor],
                 )?,
                 optional_port(
                     providers,
                     &service_instance,
-                    bno085_contract::ports::ACCELEROMETER.signature(),
+                    bno085_contract::bno085::methods::ACCELEROMETER.signature(),
                     vec![accelerometer_sensor],
                 )?,
                 optional_port(
                     providers,
                     &service_instance,
-                    bno085_contract::ports::GYROSCOPE.signature(),
+                    bno085_contract::bno085::methods::GYROSCOPE.signature(),
                     vec![gyroscope_sensor],
                 )?,
             ]
@@ -170,7 +175,7 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                ddsm115_contract::ports::ENCODER.signature(),
+                ddsm115_contract::ddsm115::methods::ENCODER.signature(),
                 vec![joint_id.clone()],
             )?;
             Ok((
@@ -191,12 +196,18 @@ pub(super) fn bind_observation(
         } => {
             validate_text(&service_instance, "OAK-D Lite service instance")?;
             validate_text(&sensor_frame_id, "OAK-D Lite sensor frame")?;
-            let orientation = model.bind_sensor(oak_contract::ports::IMU, &orientation_sensor)?;
-            let accelerometer =
-                model.bind_sensor(oak_contract::ports::ACCELEROMETER, &accelerometer_sensor)?;
-            let gyroscope = model.bind_sensor(oak_contract::ports::GYROSCOPE, &gyroscope_sensor)?;
+            let orientation =
+                model.bind_sensor(oak_contract::oak_d_lite::methods::IMU, &orientation_sensor)?;
+            let accelerometer = model.bind_sensor(
+                oak_contract::oak_d_lite::methods::ACCELEROMETER,
+                &accelerometer_sensor,
+            )?;
+            let gyroscope = model.bind_sensor(
+                oak_contract::oak_d_lite::methods::GYROSCOPE,
+                &gyroscope_sensor,
+            )?;
             let _sensor_site = sensor_site
-                .map(|site| model.bind_site(oak_contract::ports::IMU, &site))
+                .map(|site| model.bind_site(oak_contract::oak_d_lite::methods::IMU, &site))
                 .transpose()?;
             require_sensor_kind(
                 &orientation,
@@ -217,19 +228,19 @@ pub(super) fn bind_observation(
                 optional_port(
                     providers,
                     &service_instance,
-                    oak_contract::ports::IMU.signature(),
+                    oak_contract::oak_d_lite::methods::IMU.signature(),
                     vec![orientation_sensor],
                 )?,
                 optional_port(
                     providers,
                     &service_instance,
-                    oak_contract::ports::ACCELEROMETER.signature(),
+                    oak_contract::oak_d_lite::methods::ACCELEROMETER.signature(),
                     vec![accelerometer_sensor],
                 )?,
                 optional_port(
                     providers,
                     &service_instance,
-                    oak_contract::ports::GYROSCOPE.signature(),
+                    oak_contract::oak_d_lite::methods::GYROSCOPE.signature(),
                     vec![gyroscope_sensor],
                 )?,
             ]
@@ -261,11 +272,11 @@ pub(super) fn bind_observation(
             validate_text(&service_instance, "ZED-F9P service instance")?;
             validate_text(&antenna_site, "ZED-F9P antenna site")?;
             georeference.validate()?;
-            let antenna = model.bind_site(zed_contract::ports::GNSS, &antenna_site)?;
+            let antenna = model.bind_site(zed_contract::zed_f9p::methods::GNSS, &antenna_site)?;
             let fact = require_port(
                 providers,
                 &service_instance,
-                zed_contract::ports::GNSS.signature(),
+                zed_contract::zed_f9p::methods::GNSS.signature(),
                 vec![antenna_site],
             )?;
             Ok((
@@ -285,10 +296,11 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                oak_contract::ports::LEFT_MONO.signature(),
+                oak_contract::oak_d_lite::methods::LEFT_MONO.signature(),
                 vec![native_camera.clone()],
             )?;
-            let camera = model.bind_camera(oak_contract::ports::LEFT_MONO, &native_camera)?;
+            let camera =
+                model.bind_camera(oak_contract::oak_d_lite::methods::LEFT_MONO, &native_camera)?;
             Ok((
                 BoundObservation::OakLeftMonoCamera {
                     service_instance,
@@ -305,10 +317,11 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                oak_contract::ports::RGB.signature(),
+                oak_contract::oak_d_lite::methods::RGB.signature(),
                 vec![native_camera.clone()],
             )?;
-            let camera = model.bind_camera(oak_contract::ports::RGB, &native_camera)?;
+            let camera =
+                model.bind_camera(oak_contract::oak_d_lite::methods::RGB, &native_camera)?;
             Ok((
                 BoundObservation::OakRgbCamera {
                     service_instance,
@@ -325,10 +338,13 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                oak_contract::ports::RIGHT_MONO.signature(),
+                oak_contract::oak_d_lite::methods::RIGHT_MONO.signature(),
                 vec![native_camera.clone()],
             )?;
-            let camera = model.bind_camera(oak_contract::ports::RIGHT_MONO, &native_camera)?;
+            let camera = model.bind_camera(
+                oak_contract::oak_d_lite::methods::RIGHT_MONO,
+                &native_camera,
+            )?;
             Ok((
                 BoundObservation::OakRightMonoCamera {
                     service_instance,
@@ -354,10 +370,11 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                oak_contract::ports::DEPTH.signature(),
+                oak_contract::oak_d_lite::methods::DEPTH.signature(),
                 vec![native_camera.clone()],
             )?;
-            let camera = model.bind_camera(oak_contract::ports::DEPTH, &native_camera)?;
+            let camera =
+                model.bind_camera(oak_contract::oak_d_lite::methods::DEPTH, &native_camera)?;
             Ok((
                 BoundObservation::OakDepth {
                     service_instance,
@@ -378,10 +395,10 @@ pub(super) fn bind_observation(
             let _ = require_port(
                 providers,
                 &service_instance,
-                vl53l1x_contract::ports::RANGE.signature(),
+                vl53l1x_contract::vl53l1x::methods::RANGE.signature(),
                 vec![native_site.clone()],
             )?;
-            let site = model.bind_site(vl53l1x_contract::ports::RANGE, &native_site)?;
+            let site = model.bind_site(vl53l1x_contract::vl53l1x::methods::RANGE, &native_site)?;
             if !min_range_m.is_finite()
                 || !max_range_m.is_finite()
                 || !fov_rad.is_finite()
@@ -396,7 +413,7 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                vl53l1x_contract::ports::RANGE.signature(),
+                vl53l1x_contract::vl53l1x::methods::RANGE.signature(),
                 vec![native_site],
             )?;
             Ok((
@@ -417,16 +434,17 @@ pub(super) fn bind_actuation(
     model: &Model,
     config: &ActuationDeclaration,
 ) -> Result<(BoundActuation, NativeActuationBindingFact), NativeProviderError> {
-    let port = phoxal_service_motion::ports::ACTUATORS;
-    if config.port != port.name()
-        || config.payload_fqn != phoxal_service_motion::ActuatorSetpoint::full_name()
+    let port = crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS;
+    if config.port != port.signature().endpoint
+        || config.payload_fqn
+            != crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint::full_name()
     {
         return Err(NativeProviderError::InvalidActuation(format!(
             "actuation binding {}/{} must use generated motion port {} with payload {}",
             config.service_instance,
             config.port,
-            port.name(),
-            phoxal_service_motion::ActuatorSetpoint::full_name()
+            port.signature().endpoint,
+            crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint::full_name()
         )));
     }
     validate_text(&config.service_instance, "motion service instance")?;
@@ -510,29 +528,30 @@ pub(super) fn bind_actuation(
 pub(super) fn require_port(
     providers: &ProviderSet,
     service_instance: &str,
-    signature: PortSignature,
+    signature: MethodSignature,
     native_names: Vec<String>,
 ) -> Result<NativeObservationBindingFact, NativeProviderError> {
     let requirement = providers
-        .get(service_instance, signature.name)
+        .get(service_instance, signature.endpoint)
         .ok_or_else(|| {
             NativeProviderError::InvalidPayload(format!(
                 "no provider requirement for {service_instance}/{}",
-                signature.name
+                signature.endpoint
             ))
         })?;
-    if requirement.kind != wire_kind(signature.kind) as i32
+    if requirement.shape != phoxal::communication::session::MethodShape::Observation as i32
+        || signature.shape != phoxal::contract::MethodShape::Observation
         || requirement.payload_fqn != signature.response
         || requirement.input_fqn != signature.request
     {
         return Err(NativeProviderError::InvalidPayload(format!(
             "provider {service_instance}/{} does not match generated signature {}",
-            signature.name, signature.response
+            signature.endpoint, signature.response
         )));
     }
     Ok(NativeObservationBindingFact {
         service_instance: service_instance.to_owned(),
-        port: signature.name.to_owned(),
+        port: signature.endpoint.to_owned(),
         payload_fqn: signature.response.to_owned(),
         native_names,
     })
@@ -541,10 +560,13 @@ pub(super) fn require_port(
 pub(super) fn optional_port(
     providers: &ProviderSet,
     service_instance: &str,
-    signature: PortSignature,
+    signature: MethodSignature,
     native_names: Vec<String>,
 ) -> Result<Option<NativeObservationBindingFact>, NativeProviderError> {
-    if providers.get(service_instance, signature.name).is_none() {
+    if providers
+        .get(service_instance, signature.endpoint)
+        .is_none()
+    {
         return Ok(None);
     }
     require_port(providers, service_instance, signature, native_names).map(Some)
@@ -577,18 +599,4 @@ pub(super) fn validate_text(value: &str, field: &str) -> Result<(), NativeProvid
         )));
     }
     Ok(())
-}
-
-pub(super) fn wire_kind(kind: phoxal::port::PortKind) -> phoxal::communication::session::PortKind {
-    use phoxal::communication::session::PortKind as Wire;
-    match kind {
-        phoxal::port::PortKind::State => Wire::State,
-        phoxal::port::PortKind::Sample => Wire::Sample,
-        phoxal::port::PortKind::Event => Wire::Event,
-        phoxal::port::PortKind::Stream => Wire::Stream,
-        phoxal::port::PortKind::Setpoint => Wire::Setpoint,
-        phoxal::port::PortKind::Read => Wire::Read,
-        phoxal::port::PortKind::Commands => Wire::Commands,
-        _ => Wire::Unspecified,
-    }
 }
