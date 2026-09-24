@@ -20,8 +20,7 @@ use crate::authority::{
 };
 use phoxal::communication::session::MethodShape;
 use phoxal::communication::simulation::{
-    Actuation, Observation, PhaseStatus, ProductDisposition, ProgressResponse,
-    ReleaseAuthorityResponse,
+    Actuation, Observation, ProductDisposition, ProgressResponse, ReleaseAuthorityResponse,
 };
 use sha2::{Digest, Sha256};
 
@@ -796,7 +795,7 @@ where
             .observations(scene.model(), &state, quantum_ns)
             .map_err(RemoteSceneError::Provider)?;
         authority
-            .admit_initial_recovering(observations)
+            .admit_initial(observations)
             .await
             .map_err(RemoteSceneError::Authority)?;
         let generation = authority.generation();
@@ -864,29 +863,6 @@ where
         self.integrate_and_admit(actuation).await
     }
 
-    /// Recover only the retained phase. An admission retry never integrates again.
-    pub async fn retry_uncertain(
-        &mut self,
-    ) -> Result<&StateSnapshot, RemoteSceneError<T::Error, P::Error>> {
-        self.ensure_generation()?;
-        let result = self
-            .authority
-            .retry_uncertain()
-            .await
-            .map_err(RemoteSceneError::Authority)?;
-        match result.status {
-            PhaseStatus::Prepared => self.integrate_and_admit(result.actuation).await,
-            PhaseStatus::ObservationsAdmitted
-                if self.state.boundary() == self.authority.boundary() =>
-            {
-                Ok(&self.state)
-            }
-            _ => Err(RemoteSceneError::Fencing(
-                "recovered phase does not match native state".into(),
-            )),
-        }
-    }
-
     async fn integrate_and_admit(
         &mut self,
         actuation: Vec<Actuation>,
@@ -940,7 +916,7 @@ where
             .observations(self.scene.model(), &self.state, self.authority.quantum_ns())
             .map_err(RemoteSceneError::Provider)?;
         self.authority
-            .admit_initial_recovering(observations)
+            .admit_initial(observations)
             .await
             .map_err(RemoteSceneError::Authority)?;
         self.applied_actuation = None;

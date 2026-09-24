@@ -1,4 +1,4 @@
-//! Exclusive simulation authority and receipt-backed three-phase transitions.
+//! Exclusive simulation authority and fail-fast three-phase transitions.
 
 use crate::remote::{ProviderSet, ProviderSetError};
 use phoxal::communication::simulation::*;
@@ -123,10 +123,6 @@ pub enum AuthorityClientError<E: fmt::Display> {
     Protocol(String),
     #[error("simulation authority lease expired")]
     LeaseExpired,
-    #[error("a simulation phase is still pending")]
-    PendingPhase,
-    #[error("there is no pending simulation phase")]
-    NoPendingPhase,
 }
 
 #[derive(Clone, Debug)]
@@ -141,14 +137,12 @@ struct PendingPhase {
     request: PhaseRequest,
     key: TransitionKey,
     correlation: Vec<u8>,
-    digest: Vec<u8>,
     products: Vec<ProductMembership>,
     status: PhaseStatus,
 }
 
 #[derive(Debug)]
 pub struct CompletedPhase {
-    pub status: PhaseStatus,
     pub actuation: Vec<Actuation>,
 }
 
@@ -170,7 +164,6 @@ pub struct AuthorityClient<T> {
     prepared: bool,
     lease: Duration,
     deadline: Option<Instant>,
-    pending: Option<PendingPhase>,
 }
 
 impl<T> fmt::Debug for AuthorityClient<T> {
@@ -178,7 +171,6 @@ impl<T> fmt::Debug for AuthorityClient<T> {
         f.debug_struct("AuthorityClient")
             .field("state", &self.state)
             .field("boundary", &self.boundary)
-            .field("pending", &self.pending.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -234,7 +226,6 @@ impl<T: SimulationTransport> AuthorityClient<T> {
             prepared: false,
             lease: Duration::ZERO,
             deadline: None,
-            pending: None,
         })
     }
     pub fn execution_id(&self) -> &str {
@@ -324,7 +315,6 @@ impl<T: SimulationTransport> AuthorityClient<T> {
                 correlation_id: correlation.clone(),
                 max_product_bytes: 4 * 1024 * 1024,
                 max_cut_bytes: 8 * 1024 * 1024,
-                receipt_byte_cap: 512 * 1024,
                 session_id: Vec::new(),
             })
             .await
@@ -340,7 +330,6 @@ impl<T: SimulationTransport> AuthorityClient<T> {
             || response.correlation_id != correlation
             || response.max_product_bytes != 4 * 1024 * 1024
             || response.max_cut_bytes != 8 * 1024 * 1024
-            || response.receipt_byte_cap != 512 * 1024
         {
             self.state = AuthorityState::Failed;
             return Err(self.protocol("acquisition identity or capacity mismatch"));
@@ -391,20 +380,6 @@ impl<T: SimulationTransport> AuthorityClient<T> {
             products,
         })
     }
-    pub async fn admit_initial_recovering(
-        &mut self,
-        observations: Vec<Observation>,
-    ) -> Result<(), AuthorityClientError<T::Error>> {
-        let mut result = self.admit_initial(observations).await;
-        for _ in 0..3 {
-            if !matches!(result, Err(AuthorityClientError::UncertainPhase { .. })) {
-                break;
-            }
-            result = self.retry_uncertain().await.map(|_| ());
-        }
-        result
-    }
-
     pub async fn admit_initial(
         &mut self,
         observations: Vec<Observation>,
@@ -426,7 +401,6 @@ impl<T: SimulationTransport> AuthorityClient<T> {
             correlation_id: correlation.clone(),
         };
         let pending = PendingPhase {
-            digest: Sha256::digest(request.encode_to_vec()).to_vec(),
             request: PhaseRequest::Initial(request),
             key,
             correlation,
@@ -447,7 +421,6 @@ impl<T: SimulationTransport> AuthorityClient<T> {
             correlation_id: correlation.clone(),
         };
         let pending = PendingPhase {
-            digest: Sha256::digest(request.encode_to_vec()).to_vec(),
             request: PhaseRequest::Prepare(request),
             key,
             correlation,
@@ -481,7 +454,6 @@ impl<T: SimulationTransport> AuthorityClient<T> {
             correlation_id: correlation.clone(),
         };
         let pending = PendingPhase {
-            digest: Sha256::digest(request.encode_to_vec()).to_vec(),
             request: PhaseRequest::Observations(request),
             key,
             correlation,
@@ -494,16 +466,11 @@ impl<T: SimulationTransport> AuthorityClient<T> {
         &mut self,
         pending: PendingPhase,
     ) -> Result<CompletedPhase, AuthorityClientError<T::Error>> {
-        if self.pending.is_some() {
-            return Err(AuthorityClientError::PendingPhase);
-        }
-        self.pending = Some(pending.clone());
-        self.dispatch(&pending, None).await
+        self.dispatch(&pending).await
     }
     async fn dispatch(
         &mut self,
         pending: &PendingPhase,
-        retained_membership: Option<&[u8]>,
     ) -> Result<CompletedPhase, AuthorityClientError<T::Error>> {
         let result = match &pending.request {
             PhaseRequest::Initial(request) => self
@@ -522,12 +489,14 @@ impl<T: SimulationTransport> AuthorityClient<T> {
                 .await
                 .map(|r| (r.receipt, Vec::new())),
         };
-        let (receipt, actuation) =
-            result.map_err(|source| AuthorityClientError::UncertainPhase {
-                error: source,
+        let (receipt, actuation) = result.map_err(|error| {
+            self.state = AuthorityState::Failed;
+            AuthorityClientError::UncertainPhase {
+                error,
                 phase: pending.status,
                 boundary: pending.key.boundary,
-            })?;
+            }
+        })?;
         let Some(receipt) = receipt else {
             self.state = AuthorityState::Failed;
             return Err(self.protocol("phase receipt missing"));
@@ -562,8 +531,6 @@ impl<T: SimulationTransport> AuthorityClient<T> {
         if receipt.transition_key.as_ref() != Some(&pending.key)
             || receipt.correlation_id != pending.correlation
             || receipt.status != pending.status as i32
-            || receipt.request_digest != pending.digest
-            || retained_membership.is_some_and(|digest| digest != receipt.membership_digest)
             || receipt.membership_digest != membership_digest(&products)
             || membership_digest(&receipt.products) != membership_digest(&products)
             || receipt.prepared_boundary != self.boundary
@@ -581,7 +548,6 @@ impl<T: SimulationTransport> AuthorityClient<T> {
             self.state = AuthorityState::Failed;
             return Err(self.protocol("actuation cut exceeds byte capacity"));
         }
-        self.pending = None;
         match pending.status {
             PhaseStatus::InitialAdmitted => {
                 self.initialized = true;
@@ -602,41 +568,9 @@ impl<T: SimulationTransport> AuthorityClient<T> {
             _ => return Err(self.protocol("invalid local phase")),
         }
         self.refresh_lease()?;
-        Ok(CompletedPhase {
-            status: pending.status,
-            actuation,
-        })
+        Ok(CompletedPhase { actuation })
     }
-    pub async fn retry_uncertain(
-        &mut self,
-    ) -> Result<CompletedPhase, AuthorityClientError<T::Error>> {
-        self.ensure_live("recover phase")?;
-        let pending = self
-            .pending
-            .clone()
-            .ok_or(AuthorityClientError::NoPendingPhase)?;
-        let progress = self
-            .progress(Some(pending.key.clone()), pending.status)
-            .await?;
-        if progress.phase_status != pending.status as i32
-            || progress.request_digest != pending.digest
-            || progress.membership_digest.len() != 32
-        {
-            self.state = AuthorityState::Failed;
-            return Err(self.protocol(
-                "phase outcome is unknown, stale, or conflicts with the retained request",
-            ));
-        }
-        // The peer confirmed the exact request digest and retained receipt. This request
-        // retrieves that receipt; an evicted result must fail instead of rerunning mutation.
-        self.dispatch(&pending, Some(&progress.membership_digest))
-            .await
-    }
-    async fn progress(
-        &mut self,
-        key: Option<TransitionKey>,
-        phase: PhaseStatus,
-    ) -> Result<ProgressResponse, AuthorityClientError<T::Error>> {
+    async fn progress(&mut self) -> Result<ProgressResponse, AuthorityClientError<T::Error>> {
         let correlation = self.correlation()?;
         let response = self
             .transport
@@ -644,8 +578,6 @@ impl<T: SimulationTransport> AuthorityClient<T> {
                 authority_grant: self.authority_grant.clone(),
                 session_id: self.session_id.clone(),
                 correlation_id: correlation.clone(),
-                transition_key: key,
-                phase: phase as i32,
             })
             .await
             .map_err(AuthorityClientError::Transport)?;
@@ -666,8 +598,8 @@ impl<T: SimulationTransport> AuthorityClient<T> {
         &mut self,
     ) -> Result<ProgressResponse, AuthorityClientError<T::Error>> {
         self.ensure_live("renew authority")?;
-        let response = self.progress(None, PhaseStatus::Unspecified).await?;
-        if self.pending.is_none() && response.completed_boundary != self.boundary {
+        let response = self.progress().await?;
+        if response.completed_boundary != self.boundary {
             self.state = AuthorityState::Failed;
             return Err(self.protocol("remote completed boundary diverged"));
         }
@@ -675,8 +607,8 @@ impl<T: SimulationTransport> AuthorityClient<T> {
     }
     pub async fn reset(&mut self) -> Result<ResetResponse, AuthorityClientError<T::Error>> {
         self.ensure_live("reset")?;
-        if self.pending.is_some() || self.prepared {
-            return Err(AuthorityClientError::PendingPhase);
+        if self.prepared {
+            return Err(self.protocol("reset requires a completed transition"));
         }
         let correlation = self.correlation()?;
         let request = ResetRequest {
@@ -687,17 +619,10 @@ impl<T: SimulationTransport> AuthorityClient<T> {
             session_id: self.session_id.clone(),
             correlation_id: correlation.clone(),
         };
-        let mut result = self.transport.reset(request.clone()).await;
-        for _ in 0..3 {
-            if result.is_ok() {
-                break;
-            }
-            result = self.transport.reset(request.clone()).await;
-        }
-        let response = match result {
+        let response = match self.transport.reset(request).await {
             Ok(r) => r,
             Err(e) => {
-                self.mark_application_lost();
+                self.state = AuthorityState::Failed;
                 return Err(AuthorityClientError::Transport(e));
             }
         };
@@ -732,8 +657,8 @@ impl<T: SimulationTransport> AuthorityClient<T> {
         &mut self,
     ) -> Result<ReleaseAuthorityResponse, AuthorityClientError<T::Error>> {
         self.ensure_live("release")?;
-        if self.pending.is_some() || self.prepared {
-            return Err(AuthorityClientError::PendingPhase);
+        if self.prepared {
+            return Err(self.protocol("release requires a completed transition"));
         }
         let correlation = self.correlation()?;
         let response = self
@@ -763,7 +688,6 @@ impl<T: SimulationTransport> AuthorityClient<T> {
     pub fn mark_application_lost(&mut self) {
         self.state = AuthorityState::Lost;
         self.authority_grant.clear();
-        self.pending = None;
         self.deadline = None;
         self.generation = self.generation.saturating_add(1);
     }

@@ -8,8 +8,8 @@ The hardware supervisor and ordinary robot services do not depend on this applic
 
 Desktop and finite headless execution use the same coordinator.
 At each boundary, the coordinator obtains the accepted actuator cut, integrates one native quantum, captures due observations, and waits for their receiver-admission receipt.
-Lost replies are reconciled using the exact retained request and receipt.
-An unknown outcome or required process, capture, or delivery failure ends the run.
+An unknown transition outcome or required process, capture, or delivery failure ends the run.
+The next attempt starts a fresh execution.
 
 ## Installation boundary
 
@@ -26,6 +26,22 @@ cargo phoxal simulation status
 ```
 
 Simulator developers may still build this repository from source and pass its executable with `--simulator`.
+When changing the framework and simulator together, build this application against the framework checkout with Cargo's local registry patch so both processes use the same in-progress contracts:
+
+```sh
+cargo build --locked --config 'patch.phoxal.phoxal.path="../framework/phoxal"'
+```
+
+Run the framework's internal robot scenario from `framework/tests/robot` with the framework-built `cargo-phoxal` executable:
+
+```sh
+../../target/debug/cargo-phoxal test --locked --offline \
+  --simulator ../../../simulator/target/debug/phoxal-simulator \
+  forward_turn_stop -- --nocapture
+```
+
+Set the MuJoCo linker and loader environment described below for the source build and test run.
+The registry dependency in this repository remains the released simulator's selection.
 
 ## Build from source
 
@@ -133,5 +149,5 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
 The native tests require the same dynamic-library configuration as the executable.
-They cover exact phase recovery, authority fencing, deterministic cadence, native encoder/control behavior, georeference, and encoding.
+They cover fail-fast phase errors, authority fencing, deterministic cadence, native encoder/control behavior, georeference, and encoding.
 Full robot, desktop, memory-budget, process-failure, and released-artifact acceptance remain separate required proofs.

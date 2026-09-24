@@ -2,10 +2,10 @@
 
 use crate::mujoco::{Model, StateSnapshot, Workspace};
 use crate::{
-    authority::{AuthorityClientError, AuthorityState},
+    authority::AuthorityState,
     desktop::{Command, Worker},
     native_provider::ComponentProvider,
-    remote::{RemoteSceneError, RemoteSceneRun},
+    remote::RemoteSceneRun,
 };
 use phoxal::session::Simulation;
 use std::{
@@ -151,18 +151,5 @@ pub(super) async fn drive(
 }
 
 async fn step(run: &mut Run) -> Result<(), String> {
-    let mut result = run.step().await.map(|_| ());
-    // Retry only through retained-receipt reconciliation. Never rerun a native step.
-    for _ in 0..3 {
-        if !matches!(
-            &result,
-            Err(RemoteSceneError::Authority(
-                AuthorityClientError::UncertainPhase { .. }
-            ))
-        ) {
-            break;
-        }
-        result = run.retry_uncertain().await.map(|_| ());
-    }
-    result.map_err(|e| e.to_string())
+    run.step().await.map(|_| ()).map_err(|e| e.to_string())
 }

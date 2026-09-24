@@ -13,12 +13,9 @@ struct PeerState {
     timeline: u64,
     lost_reply: Option<PhaseStatus>,
     lost_reset: bool,
-    retained_reset: Option<(ResetRequest, ResetResponse)>,
     corrupt_receipt: bool,
-    evict_receipt: bool,
     receipts: Vec<CutReceipt>,
     applied: Vec<PhaseStatus>,
-    requests: Vec<Vec<u8>>,
 }
 
 impl Peer {
@@ -26,28 +23,14 @@ impl Peer {
         &self,
         key: TransitionKey,
         correlation: Vec<u8>,
-        bytes: Vec<u8>,
         products: Vec<ProductMembership>,
         phase: PhaseStatus,
     ) -> Result<CutReceipt, String> {
         let mut state = self.0.lock().unwrap();
-        state.requests.push(bytes.clone());
-        let digest = Sha256::digest(bytes).to_vec();
-        if let Some(receipt) = state
-            .receipts
-            .iter()
-            .find(|r| r.transition_key.as_ref() == Some(&key) && r.status == phase as i32)
-        {
-            if receipt.request_digest != digest {
-                return Err("same key, different request".into());
-            }
-            return Ok(receipt.clone());
-        }
         let next_boundary = key.boundary + u64::from(phase == PhaseStatus::ObservationsAdmitted);
         let mut receipt = CutReceipt {
             transition_key: Some(key.clone()),
             correlation_id: correlation,
-            request_digest: digest,
             membership_digest: membership_digest(&products),
             products,
             prepared_boundary: key.boundary,
@@ -62,7 +45,7 @@ impl Peer {
             return Err("reply lost after commit".into());
         }
         if state.corrupt_receipt {
-            receipt.request_digest[0] ^= 1;
+            receipt.membership_digest[0] ^= 1;
         }
         Ok(receipt)
     }
@@ -92,7 +75,6 @@ impl SimulationTransport for Peer {
                 correlation_id: r.correlation_id,
                 max_product_bytes: r.max_product_bytes,
                 max_cut_bytes: r.max_cut_bytes,
-                receipt_byte_cap: r.receipt_byte_cap,
             })
         })
     }
@@ -104,7 +86,6 @@ impl SimulationTransport for Peer {
             let receipt = self.phase(
                 r.transition_key.clone().unwrap(),
                 r.correlation_id.clone(),
-                r.encode_to_vec(),
                 r.observations
                     .iter()
                     .map(|o| o.membership.clone().unwrap())
@@ -154,7 +135,6 @@ impl SimulationTransport for Peer {
             let receipt = self.phase(
                 key.clone(),
                 r.correlation_id.clone(),
-                r.encode_to_vec(),
                 vec![member],
                 PhaseStatus::Prepared,
             )?;
@@ -172,7 +152,6 @@ impl SimulationTransport for Peer {
             let receipt = self.phase(
                 r.transition_key.clone().unwrap(),
                 r.correlation_id.clone(),
-                r.encode_to_vec(),
                 r.observations
                     .iter()
                     .map(|o| o.membership.clone().unwrap())
@@ -187,13 +166,6 @@ impl SimulationTransport for Peer {
     fn progress(&self, r: ProgressRequest) -> SimulationFuture<'_, ProgressResponse, String> {
         Box::pin(async move {
             let state = self.0.lock().unwrap();
-            let receipt = (!state.evict_receipt)
-                .then(|| {
-                    state.receipts.iter().find(|receipt| {
-                        receipt.transition_key == r.transition_key && receipt.status == r.phase
-                    })
-                })
-                .flatten();
             Ok(ProgressResponse {
                 execution_id: "execution".into(),
                 timeline_id: format!("timeline-{}", state.timeline),
@@ -201,9 +173,6 @@ impl SimulationTransport for Peer {
                 session_id: r.session_id,
                 authority_grant: r.authority_grant,
                 correlation_id: r.correlation_id,
-                phase_status: receipt.map_or(PhaseStatus::Unspecified as i32, |r| r.status),
-                request_digest: receipt.map_or_else(Vec::new, |r| r.request_digest.clone()),
-                membership_digest: receipt.map_or_else(Vec::new, |r| r.membership_digest.clone()),
                 ..Default::default()
             })
         })
@@ -211,11 +180,6 @@ impl SimulationTransport for Peer {
     fn reset(&self, r: ResetRequest) -> SimulationFuture<'_, ResetResponse, String> {
         Box::pin(async move {
             let mut state = self.0.lock().unwrap();
-            if let Some((request, response)) = &state.retained_reset
-                && request == &r
-            {
-                return Ok(response.clone());
-            }
             state.timeline += 1;
             state.boundary = 0;
             state.receipts.clear();
@@ -229,7 +193,6 @@ impl SimulationTransport for Peer {
                 previous_timeline_id: r.timeline_id.clone(),
                 requested_boundary: r.completed_boundary,
             };
-            state.retained_reset = Some((r, response.clone()));
             if state.lost_reset {
                 state.lost_reset = false;
                 return Err("reset reply lost after commit".into());
@@ -305,7 +268,7 @@ async fn authority_is_exclusive_and_hardware_refusal_does_not_mutate_client() {
 }
 
 #[tokio::test]
-async fn every_lost_phase_reply_recovers_exact_bytes_and_one_mutation() {
+async fn lost_phase_reply_fails_without_a_second_mutation() {
     for phase in [
         PhaseStatus::InitialAdmitted,
         PhaseStatus::Prepared,
@@ -315,64 +278,23 @@ async fn every_lost_phase_reply_recovers_exact_bytes_and_one_mutation() {
         let mut client = client(peer.clone());
         client.acquire().await.unwrap();
         peer.0.lock().unwrap().lost_reply = Some(phase);
-        let initial = client.admit_initial(observation(0)).await;
         if phase == PhaseStatus::InitialAdmitted {
-            assert!(initial.is_err());
-            client.retry_uncertain().await.unwrap();
+            assert!(client.admit_initial(observation(0)).await.is_err());
         } else {
-            initial.unwrap();
+            client.admit_initial(observation(0)).await.unwrap();
+            if phase == PhaseStatus::Prepared {
+                assert!(client.prepare().await.is_err());
+            } else {
+                client.prepare().await.unwrap();
+                assert!(client.admit(observation(1)).await.is_err());
+            }
         }
-        let prepared = client.prepare().await;
-        if phase == PhaseStatus::Prepared {
-            assert!(prepared.is_err());
-            assert!(client.reset().await.is_err());
-            client.retry_uncertain().await.unwrap();
-        } else {
-            prepared.unwrap();
-        }
-        assert_eq!(client.boundary(), 0);
-        let admitted = client.admit(observation(1)).await;
-        if phase == PhaseStatus::ObservationsAdmitted {
-            assert!(admitted.is_err());
-            assert_eq!(client.boundary(), 0);
-            client.retry_uncertain().await.unwrap();
-        } else {
-            admitted.unwrap();
-        }
-        assert_eq!(client.boundary(), 1);
-        let state = peer.0.lock().unwrap();
-        assert_eq!(
-            state.applied,
-            [
-                PhaseStatus::InitialAdmitted,
-                PhaseStatus::Prepared,
-                PhaseStatus::ObservationsAdmitted
-            ]
-        );
-        assert!(
-            state.requests.windows(2).any(|pair| pair[0] == pair[1]),
-            "recovery must fetch the exact retained request"
-        );
+        assert_eq!(client.state(), AuthorityState::Failed);
+        let applied = peer.0.lock().unwrap().applied.len();
+        assert!(client.prepare().await.is_err());
+        assert!(client.reset().await.is_err());
+        assert_eq!(peer.0.lock().unwrap().applied.len(), applied);
     }
-}
-
-#[tokio::test]
-async fn unknown_outcome_fails_without_replaying_or_advancing() {
-    let peer = Peer::default();
-    let mut client = client(peer.clone());
-    client.acquire().await.unwrap();
-    client.admit_initial(observation(0)).await.unwrap();
-    {
-        let mut state = peer.0.lock().unwrap();
-        state.lost_reply = Some(PhaseStatus::Prepared);
-        state.evict_receipt = true;
-    }
-    assert!(client.prepare().await.is_err());
-    let requests = peer.0.lock().unwrap().requests.len();
-    assert!(client.retry_uncertain().await.is_err());
-    assert_eq!(client.state(), AuthorityState::Failed);
-    assert_eq!(peer.0.lock().unwrap().requests.len(), requests);
-    assert_eq!(client.boundary(), 0);
 }
 
 #[tokio::test]
@@ -417,7 +339,7 @@ async fn reset_rotates_timeline_and_requires_new_initial_cut() {
 }
 
 #[tokio::test]
-async fn lost_preparation_and_observation_replies_never_integrate_twice() {
+async fn lost_reply_stops_native_run_without_reintegration() {
     use crate::mujoco::{Model, Scene};
     use crate::{
         native_provider::{
@@ -450,7 +372,6 @@ async fn lost_preparation_and_observation_replies_never_integrate_twice() {
         )
         .unwrap();
         let peer = Peer::default();
-        peer.0.lock().unwrap().lost_reply = Some(PhaseStatus::InitialAdmitted);
         let mut run = RemoteSceneRun::acquire(
             Scene::new(model).unwrap(),
             peer.clone(),
@@ -466,26 +387,31 @@ async fn lost_preparation_and_observation_replies_never_integrate_twice() {
             run.state().boundary(),
             u64::from(lost == PhaseStatus::ObservationsAdmitted)
         );
-        run.retry_uncertain().await.unwrap();
-        assert_eq!(run.boundary(), 1);
-        assert_eq!(run.state().boundary(), 1);
-        assert_eq!(run.state().time_seconds(), 0.002);
-        assert_eq!(peer.0.lock().unwrap().applied.len(), 3);
-        {
-            let mut state = peer.0.lock().unwrap();
-            state.lost_reply = Some(PhaseStatus::InitialAdmitted);
-            state.lost_reset = true;
-        }
-        run.reset().await.unwrap();
+        assert_eq!(run.authority_state(), AuthorityState::Failed);
+        let applied = peer.0.lock().unwrap().applied.len();
+        assert!(run.step().await.is_err());
+        assert!(run.reset().await.is_err());
+        assert_eq!(peer.0.lock().unwrap().applied.len(), applied);
         assert_eq!(
-            peer.0.lock().unwrap().timeline,
-            1,
-            "lost reset reply must not reset twice"
+            run.state().time_seconds(),
+            if lost == PhaseStatus::Prepared {
+                0.0
+            } else {
+                0.002
+            }
         );
-        assert_eq!(run.state().boundary(), 0);
-        assert_eq!(run.generation(), 2);
-        run.step().await.unwrap();
-        assert_eq!(run.state().time_seconds(), 0.002);
-        run.release().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn lost_reset_reply_fails_without_retry() {
+    let peer = Peer::default();
+    let mut client = client(peer.clone());
+    client.acquire().await.unwrap();
+    client.admit_initial(observation(0)).await.unwrap();
+    peer.0.lock().unwrap().lost_reset = true;
+    assert!(client.reset().await.is_err());
+    assert_eq!(client.state(), AuthorityState::Failed);
+    assert!(client.reset().await.is_err());
+    assert_eq!(peer.0.lock().unwrap().timeline, 1);
 }

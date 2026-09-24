@@ -5,6 +5,7 @@ use crate::mujoco::ComponentAttachment;
 use crate::mujoco::Model;
 use crate::mujoco::SceneComposition;
 use crate::mujoco::unique_direct_root_body;
+use phoxal::artifact::document::Source;
 use std::path::Path;
 
 pub(super) const COMPONENT_NAMESPACE_SEPARATOR: &str = "__";
@@ -53,10 +54,17 @@ pub(super) fn load_composed_model(scene: &Path, bundle: &BundleFacts) -> Result<
                 selection.mount_site, selected.mount_site
             ));
         }
-        if selected.package != selection.package {
+        let selected_name = match &selection.source {
+            Source::Path(_) => None,
+            Source::Package(package) => Some(package.name.as_str()),
+            Source::Git(git) => Some(git.name.as_str()),
+        };
+        if let Some(name) = selected_name
+            && selected.package != name
+        {
             return Err(format!(
-                "component {instance} package {} disagrees with robot selection {}",
-                selected.package, selection.package
+                "component {instance} package {} disagrees with robot selection {name}",
+                selected.package
             ));
         }
         let (component_model, _) = component_definition(&selected.definition);
