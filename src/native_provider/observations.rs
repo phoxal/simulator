@@ -3,11 +3,6 @@ use super::camera::CameraEncoding;
 use super::camera::encode_camera_observation;
 use super::camera::encode_depth_observation;
 use super::geodesy::Georeference;
-use crate::api::__contracts::phoxal::component::bno085::v1 as bno085_contract;
-use crate::api::__contracts::phoxal::component::ddsm115::v1 as ddsm115_contract;
-use crate::api::__contracts::phoxal::component::oak_d_lite::v1 as oak_contract;
-use crate::api::__contracts::phoxal::component::vl53l1x::v1 as vl53l1x_contract;
-use crate::api::__contracts::phoxal::component::zed_f9p::v1 as zed_contract;
 use crate::mujoco::CameraBinding;
 use crate::mujoco::Model;
 use crate::mujoco::SensorBinding;
@@ -17,8 +12,11 @@ use crate::mujoco::Workspace;
 use crate::remote::NativeProviderError;
 use crate::remote::ProviderSet;
 use phoxal::communication::simulation::Observation;
-use phoxal::contract::MethodDescriptor;
-use phoxal::contract::MethodSignature;
+use phoxal::contracts::MethodSignature;
+use phoxal::contracts::component::gnss as zed_contract;
+use phoxal::contracts::component::imu as bno085_contract;
+use phoxal::contracts::component::imu as oak_contract;
+use phoxal::contracts::geometry::{Quaternion, Vector3};
 use prost::Message;
 
 #[derive(Clone, Debug)]
@@ -106,18 +104,18 @@ impl BoundObservation {
                 let accelerometer = exact_values(accelerometer, state, 3, "BNO085 acceleration")?;
                 let gyroscope = exact_values(gyroscope, state, 3, "BNO085 angular velocity")?;
                 let imu = bno085_contract::ImuSample {
-                    orientation: Some(bno085_contract::Quaternion {
+                    orientation: Some(Quaternion {
                         w: orientation[0],
                         x: orientation[1],
                         y: orientation[2],
                         z: orientation[3],
                     }),
-                    angular_velocity_radps: Some(bno085_contract::Vector3 {
+                    angular_velocity_radps: Some(Vector3 {
                         x: gyroscope[0],
                         y: gyroscope[1],
                         z: gyroscope[2],
                     }),
-                    linear_acceleration_mps2: Some(bno085_contract::Vector3 {
+                    linear_acceleration_mps2: Some(Vector3 {
                         x: accelerometer[0],
                         y: accelerometer[1],
                         z: accelerometer[2],
@@ -125,14 +123,14 @@ impl BoundObservation {
                     sensor_frame_id: frame_id.clone(),
                 };
                 let accel = bno085_contract::AccelerometerSample {
-                    linear_acceleration_mps2: Some(bno085_contract::Vector3 {
+                    linear_acceleration_mps2: Some(Vector3 {
                         x: accelerometer[0],
                         y: accelerometer[1],
                         z: accelerometer[2],
                     }),
                 };
                 let gyro = bno085_contract::GyroscopeSample {
-                    angular_velocity_radps: Some(bno085_contract::Vector3 {
+                    angular_velocity_radps: Some(Vector3 {
                         x: gyroscope[0],
                         y: gyroscope[1],
                         z: gyroscope[2],
@@ -142,14 +140,14 @@ impl BoundObservation {
                 if providers
                     .get(
                         service_instance,
-                        bno085_contract::bno085::methods::IMU.signature().endpoint,
+                        crate::contract::simulator_api::IMU.signature().endpoint,
                     )
                     .is_some()
                 {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        bno085_contract::bno085::methods::IMU.signature(),
+                        crate::contract::simulator_api::IMU.signature(),
                         state,
                         quantum_ns,
                         imu.encode_to_vec(),
@@ -158,7 +156,7 @@ impl BoundObservation {
                 if providers
                     .get(
                         service_instance,
-                        bno085_contract::bno085::methods::ACCELEROMETER
+                        crate::contract::simulator_api::ACCELEROMETER
                             .signature()
                             .endpoint,
                     )
@@ -167,7 +165,7 @@ impl BoundObservation {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        bno085_contract::bno085::methods::ACCELEROMETER.signature(),
+                        crate::contract::simulator_api::ACCELEROMETER.signature(),
                         state,
                         quantum_ns,
                         accel.encode_to_vec(),
@@ -176,7 +174,7 @@ impl BoundObservation {
                 if providers
                     .get(
                         service_instance,
-                        bno085_contract::bno085::methods::GYROSCOPE
+                        crate::contract::simulator_api::GYROSCOPE
                             .signature()
                             .endpoint,
                     )
@@ -185,7 +183,7 @@ impl BoundObservation {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        bno085_contract::bno085::methods::GYROSCOPE.signature(),
+                        crate::contract::simulator_api::GYROSCOPE.signature(),
                         state,
                         quantum_ns,
                         gyro.encode_to_vec(),
@@ -199,9 +197,7 @@ impl BoundObservation {
             } => Ok(vec![crate::observations::encode_encoder_observation(
                 providers,
                 service_instance,
-                ddsm115_contract::ddsm115::methods::ENCODER
-                    .signature()
-                    .endpoint,
+                crate::contract::simulator_api::ENCODER.signature().endpoint,
                 joint_id,
                 model,
                 state,
@@ -219,18 +215,18 @@ impl BoundObservation {
                     exact_values(accelerometer, state, 3, "OAK-D Lite acceleration")?;
                 let gyroscope = exact_values(gyroscope, state, 3, "OAK-D Lite angular velocity")?;
                 let imu = oak_contract::ImuSample {
-                    orientation: Some(oak_contract::Quaternion {
+                    orientation: Some(Quaternion {
                         w: orientation[0],
                         x: orientation[1],
                         y: orientation[2],
                         z: orientation[3],
                     }),
-                    angular_velocity_radps: Some(oak_contract::Vector3 {
+                    angular_velocity_radps: Some(Vector3 {
                         x: gyroscope[0],
                         y: gyroscope[1],
                         z: gyroscope[2],
                     }),
-                    linear_acceleration_mps2: Some(oak_contract::Vector3 {
+                    linear_acceleration_mps2: Some(Vector3 {
                         x: accelerometer[0],
                         y: accelerometer[1],
                         z: accelerometer[2],
@@ -238,14 +234,14 @@ impl BoundObservation {
                     sensor_frame_id: frame_id.clone(),
                 };
                 let accel = oak_contract::AccelerometerSample {
-                    linear_acceleration_mps2: Some(oak_contract::Vector3 {
+                    linear_acceleration_mps2: Some(Vector3 {
                         x: accelerometer[0],
                         y: accelerometer[1],
                         z: accelerometer[2],
                     }),
                 };
                 let gyro = oak_contract::GyroscopeSample {
-                    angular_velocity_radps: Some(oak_contract::Vector3 {
+                    angular_velocity_radps: Some(Vector3 {
                         x: gyroscope[0],
                         y: gyroscope[1],
                         z: gyroscope[2],
@@ -255,14 +251,14 @@ impl BoundObservation {
                 if providers
                     .get(
                         service_instance,
-                        oak_contract::oak_d_lite::methods::IMU.signature().endpoint,
+                        crate::contract::simulator_api::IMU.signature().endpoint,
                     )
                     .is_some()
                 {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        oak_contract::oak_d_lite::methods::IMU.signature(),
+                        crate::contract::simulator_api::IMU.signature(),
                         state,
                         quantum_ns,
                         imu.encode_to_vec(),
@@ -271,7 +267,7 @@ impl BoundObservation {
                 if providers
                     .get(
                         service_instance,
-                        oak_contract::oak_d_lite::methods::ACCELEROMETER
+                        crate::contract::simulator_api::ACCELEROMETER
                             .signature()
                             .endpoint,
                     )
@@ -280,7 +276,7 @@ impl BoundObservation {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        oak_contract::oak_d_lite::methods::ACCELEROMETER.signature(),
+                        crate::contract::simulator_api::ACCELEROMETER.signature(),
                         state,
                         quantum_ns,
                         accel.encode_to_vec(),
@@ -289,7 +285,7 @@ impl BoundObservation {
                 if providers
                     .get(
                         service_instance,
-                        oak_contract::oak_d_lite::methods::GYROSCOPE
+                        crate::contract::simulator_api::GYROSCOPE
                             .signature()
                             .endpoint,
                     )
@@ -298,7 +294,7 @@ impl BoundObservation {
                     observations.push(encode_observation(
                         providers,
                         service_instance,
-                        oak_contract::oak_d_lite::methods::GYROSCOPE.signature(),
+                        crate::contract::simulator_api::GYROSCOPE.signature(),
                         state,
                         quantum_ns,
                         gyro.encode_to_vec(),
@@ -322,7 +318,7 @@ impl BoundObservation {
                 Ok(vec![encode_observation(
                     providers,
                     service_instance,
-                    zed_contract::zed_f9p::methods::GNSS.signature(),
+                    crate::contract::simulator_api::GNSS.signature(),
                     state,
                     quantum_ns,
                     sample.encode_to_vec(),
@@ -334,7 +330,7 @@ impl BoundObservation {
             } => Ok(vec![encode_camera_observation(
                 providers,
                 service_instance,
-                oak_contract::oak_d_lite::methods::LEFT_MONO.signature(),
+                crate::contract::simulator_api::LEFT_MONO.signature(),
                 camera,
                 render_workspace,
                 state,
@@ -347,7 +343,7 @@ impl BoundObservation {
             } => Ok(vec![encode_camera_observation(
                 providers,
                 service_instance,
-                oak_contract::oak_d_lite::methods::RGB.signature(),
+                crate::contract::simulator_api::RGB.signature(),
                 camera,
                 render_workspace,
                 state,
@@ -360,7 +356,7 @@ impl BoundObservation {
             } => Ok(vec![encode_camera_observation(
                 providers,
                 service_instance,
-                oak_contract::oak_d_lite::methods::RIGHT_MONO.signature(),
+                crate::contract::simulator_api::RIGHT_MONO.signature(),
                 camera,
                 render_workspace,
                 state,
@@ -416,15 +412,13 @@ pub(super) fn encode_range_observation(
     let workspace = observation_workspace.ok_or_else(|| {
         NativeProviderError::Unsupported(format!(
             "provider {service_instance}/{} has no native observation workspace",
-            vl53l1x_contract::vl53l1x::methods::RANGE
-                .signature()
-                .endpoint
+            crate::contract::simulator_api::RANGE.signature().endpoint
         ))
     })?;
     let distance = workspace
         .finite_fov_range(site.native, min_range_m, max_range_m, fov_rad)
         .map_err(|error| NativeProviderError::Unsupported(error.to_string()))?;
-    let sample = phoxal::robotics::RangeSample {
+    let sample = phoxal::contracts::component::range::RangeSample {
         distance_m: distance.unwrap_or(0.0),
         min_range_m,
         max_range_m,
@@ -433,7 +427,7 @@ pub(super) fn encode_range_observation(
     Ok(vec![encode_observation(
         providers,
         service_instance,
-        vl53l1x_contract::vl53l1x::methods::RANGE.signature(),
+        crate::contract::simulator_api::RANGE.signature(),
         state,
         quantum_ns,
         sample.encode_to_vec(),

@@ -2,7 +2,7 @@
 
 Phoxal's MuJoCo application owns one native scene and controls a robot through its supervisor's authenticated public simulation protocol.
 It is an independent Cargo workspace and executable.
-Its own `api/` tree and `build.rs` generate the Protobuf types it needs through the `phoxal` build dependency.
+Its simulator-owned Rust messages and the SDK standard component contracts provide the payload types it needs, with Prost and retained Protobuf descriptors supplied by the framework.
 The simulator does not depend on service or component libraries to read a robot bundle; the bundle carries exact contract descriptors and participant provenance.
 The hardware supervisor and ordinary robot services do not depend on this application or initialize MuJoCo.
 

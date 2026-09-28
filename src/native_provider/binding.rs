@@ -2,11 +2,6 @@ use super::config::ActuationDeclaration;
 use super::config::NativeControlMode;
 use super::config::ObservationBinding;
 use super::observations::BoundObservation;
-use crate::api::__contracts::phoxal::component::bno085::v1 as bno085_contract;
-use crate::api::__contracts::phoxal::component::ddsm115::v1 as ddsm115_contract;
-use crate::api::__contracts::phoxal::component::oak_d_lite::v1 as oak_contract;
-use crate::api::__contracts::phoxal::component::vl53l1x::v1 as vl53l1x_contract;
-use crate::api::__contracts::phoxal::component::zed_f9p::v1 as zed_contract;
 use crate::mujoco::ActuatorBinding;
 use crate::mujoco::ActuatorMode;
 use crate::mujoco::Model;
@@ -15,8 +10,7 @@ use crate::mujoco::SensorKind;
 use crate::remote::ActuationBinding;
 use crate::remote::NativeProviderError;
 use crate::remote::ProviderSet;
-use phoxal::contract::MethodDescriptor;
-use phoxal::contract::MethodSignature;
+use phoxal::contracts::MethodSignature;
 use prost::Name;
 use std::collections::BTreeSet;
 
@@ -92,17 +86,15 @@ pub(super) fn bind_observation(
             validate_text(&service_instance, "BNO085 service instance")?;
             validate_text(&sensor_frame_id, "BNO085 sensor frame")?;
             let orientation =
-                model.bind_sensor(bno085_contract::bno085::methods::IMU, &orientation_sensor)?;
+                model.bind_sensor(crate::contract::simulator_api::IMU, &orientation_sensor)?;
             let accelerometer = model.bind_sensor(
-                bno085_contract::bno085::methods::ACCELEROMETER,
+                crate::contract::simulator_api::ACCELEROMETER,
                 &accelerometer_sensor,
             )?;
-            let gyroscope = model.bind_sensor(
-                bno085_contract::bno085::methods::GYROSCOPE,
-                &gyroscope_sensor,
-            )?;
+            let gyroscope =
+                model.bind_sensor(crate::contract::simulator_api::GYROSCOPE, &gyroscope_sensor)?;
             let _sensor_site = sensor_site
-                .map(|site| model.bind_site(bno085_contract::bno085::methods::IMU, &site))
+                .map(|site| model.bind_site(crate::contract::simulator_api::IMU, &site))
                 .transpose()?;
             require_sensor_kind(
                 &orientation,
@@ -119,19 +111,19 @@ pub(super) fn bind_observation(
                 optional_port(
                     providers,
                     &service_instance,
-                    bno085_contract::bno085::methods::IMU.signature(),
+                    crate::contract::simulator_api::IMU.signature(),
                     vec![orientation_sensor],
                 )?,
                 optional_port(
                     providers,
                     &service_instance,
-                    bno085_contract::bno085::methods::ACCELEROMETER.signature(),
+                    crate::contract::simulator_api::ACCELEROMETER.signature(),
                     vec![accelerometer_sensor],
                 )?,
                 optional_port(
                     providers,
                     &service_instance,
-                    bno085_contract::bno085::methods::GYROSCOPE.signature(),
+                    crate::contract::simulator_api::GYROSCOPE.signature(),
                     vec![gyroscope_sensor],
                 )?,
             ]
@@ -175,7 +167,7 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                ddsm115_contract::ddsm115::methods::ENCODER.signature(),
+                crate::contract::simulator_api::ENCODER.signature(),
                 vec![joint_id.clone()],
             )?;
             Ok((
@@ -197,17 +189,15 @@ pub(super) fn bind_observation(
             validate_text(&service_instance, "OAK-D Lite service instance")?;
             validate_text(&sensor_frame_id, "OAK-D Lite sensor frame")?;
             let orientation =
-                model.bind_sensor(oak_contract::oak_d_lite::methods::IMU, &orientation_sensor)?;
+                model.bind_sensor(crate::contract::simulator_api::IMU, &orientation_sensor)?;
             let accelerometer = model.bind_sensor(
-                oak_contract::oak_d_lite::methods::ACCELEROMETER,
+                crate::contract::simulator_api::ACCELEROMETER,
                 &accelerometer_sensor,
             )?;
-            let gyroscope = model.bind_sensor(
-                oak_contract::oak_d_lite::methods::GYROSCOPE,
-                &gyroscope_sensor,
-            )?;
+            let gyroscope =
+                model.bind_sensor(crate::contract::simulator_api::GYROSCOPE, &gyroscope_sensor)?;
             let _sensor_site = sensor_site
-                .map(|site| model.bind_site(oak_contract::oak_d_lite::methods::IMU, &site))
+                .map(|site| model.bind_site(crate::contract::simulator_api::IMU, &site))
                 .transpose()?;
             require_sensor_kind(
                 &orientation,
@@ -228,19 +218,19 @@ pub(super) fn bind_observation(
                 optional_port(
                     providers,
                     &service_instance,
-                    oak_contract::oak_d_lite::methods::IMU.signature(),
+                    crate::contract::simulator_api::IMU.signature(),
                     vec![orientation_sensor],
                 )?,
                 optional_port(
                     providers,
                     &service_instance,
-                    oak_contract::oak_d_lite::methods::ACCELEROMETER.signature(),
+                    crate::contract::simulator_api::ACCELEROMETER.signature(),
                     vec![accelerometer_sensor],
                 )?,
                 optional_port(
                     providers,
                     &service_instance,
-                    oak_contract::oak_d_lite::methods::GYROSCOPE.signature(),
+                    crate::contract::simulator_api::GYROSCOPE.signature(),
                     vec![gyroscope_sensor],
                 )?,
             ]
@@ -272,11 +262,11 @@ pub(super) fn bind_observation(
             validate_text(&service_instance, "ZED-F9P service instance")?;
             validate_text(&antenna_site, "ZED-F9P antenna site")?;
             georeference.validate()?;
-            let antenna = model.bind_site(zed_contract::zed_f9p::methods::GNSS, &antenna_site)?;
+            let antenna = model.bind_site(crate::contract::simulator_api::GNSS, &antenna_site)?;
             let fact = require_port(
                 providers,
                 &service_instance,
-                zed_contract::zed_f9p::methods::GNSS.signature(),
+                crate::contract::simulator_api::GNSS.signature(),
                 vec![antenna_site],
             )?;
             Ok((
@@ -296,11 +286,11 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                oak_contract::oak_d_lite::methods::LEFT_MONO.signature(),
+                crate::contract::simulator_api::LEFT_MONO.signature(),
                 vec![native_camera.clone()],
             )?;
             let camera =
-                model.bind_camera(oak_contract::oak_d_lite::methods::LEFT_MONO, &native_camera)?;
+                model.bind_camera(crate::contract::simulator_api::LEFT_MONO, &native_camera)?;
             Ok((
                 BoundObservation::OakLeftMonoCamera {
                     service_instance,
@@ -317,11 +307,10 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                oak_contract::oak_d_lite::methods::RGB.signature(),
+                crate::contract::simulator_api::RGB.signature(),
                 vec![native_camera.clone()],
             )?;
-            let camera =
-                model.bind_camera(oak_contract::oak_d_lite::methods::RGB, &native_camera)?;
+            let camera = model.bind_camera(crate::contract::simulator_api::RGB, &native_camera)?;
             Ok((
                 BoundObservation::OakRgbCamera {
                     service_instance,
@@ -338,13 +327,11 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                oak_contract::oak_d_lite::methods::RIGHT_MONO.signature(),
+                crate::contract::simulator_api::RIGHT_MONO.signature(),
                 vec![native_camera.clone()],
             )?;
-            let camera = model.bind_camera(
-                oak_contract::oak_d_lite::methods::RIGHT_MONO,
-                &native_camera,
-            )?;
+            let camera =
+                model.bind_camera(crate::contract::simulator_api::RIGHT_MONO, &native_camera)?;
             Ok((
                 BoundObservation::OakRightMonoCamera {
                     service_instance,
@@ -370,11 +357,11 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                oak_contract::oak_d_lite::methods::DEPTH.signature(),
+                crate::contract::simulator_api::DEPTH.signature(),
                 vec![native_camera.clone()],
             )?;
             let camera =
-                model.bind_camera(oak_contract::oak_d_lite::methods::DEPTH, &native_camera)?;
+                model.bind_camera(crate::contract::simulator_api::DEPTH, &native_camera)?;
             Ok((
                 BoundObservation::OakDepth {
                     service_instance,
@@ -395,10 +382,10 @@ pub(super) fn bind_observation(
             let _ = require_port(
                 providers,
                 &service_instance,
-                vl53l1x_contract::vl53l1x::methods::RANGE.signature(),
+                crate::contract::simulator_api::RANGE.signature(),
                 vec![native_site.clone()],
             )?;
-            let site = model.bind_site(vl53l1x_contract::vl53l1x::methods::RANGE, &native_site)?;
+            let site = model.bind_site(crate::contract::simulator_api::RANGE, &native_site)?;
             if !min_range_m.is_finite()
                 || !max_range_m.is_finite()
                 || !fov_rad.is_finite()
@@ -413,7 +400,7 @@ pub(super) fn bind_observation(
             let fact = require_port(
                 providers,
                 &service_instance,
-                vl53l1x_contract::vl53l1x::methods::RANGE.signature(),
+                crate::contract::simulator_api::RANGE.signature(),
                 vec![native_site],
             )?;
             Ok((
@@ -434,17 +421,17 @@ pub(super) fn bind_actuation(
     model: &Model,
     config: &ActuationDeclaration,
 ) -> Result<(BoundActuation, NativeActuationBindingFact), NativeProviderError> {
-    let port = crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS;
+    let port = crate::contract::simulator_api::ACTUATORS;
     if config.port != port.signature().endpoint
         || config.payload_fqn
-            != crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint::full_name()
+            != phoxal::contracts::component::actuator::ActuatorSetpoint::full_name()
     {
         return Err(NativeProviderError::InvalidActuation(format!(
             "actuation binding {}/{} must use generated motion port {} with payload {}",
             config.service_instance,
             config.port,
             port.signature().endpoint,
-            crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint::full_name()
+            phoxal::contracts::component::actuator::ActuatorSetpoint::full_name()
         )));
     }
     validate_text(&config.service_instance, "motion service instance")?;
@@ -540,7 +527,7 @@ pub(super) fn require_port(
             ))
         })?;
     if requirement.shape != phoxal::communication::session::MethodShape::Observation as i32
-        || signature.shape != phoxal::contract::MethodShape::Observation
+        || signature.shape != phoxal::contracts::MethodShape::Observation
         || requirement.payload_fqn != signature.response
         || requirement.input_fqn != signature.request
     {

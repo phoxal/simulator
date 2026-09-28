@@ -1,13 +1,12 @@
 use super::observations::encode_observation;
-use crate::api::__contracts::phoxal::component::oak_d_lite::v1 as oak_contract;
 use crate::mujoco::CameraBinding;
 use crate::mujoco::StateSnapshot;
 use crate::mujoco::Workspace;
 use crate::remote::NativeProviderError;
 use crate::remote::ProviderSet;
 use phoxal::communication::simulation::Observation;
-use phoxal::contract::MethodDescriptor;
-use phoxal::contract::MethodSignature;
+use phoxal::contracts::MethodSignature;
+use phoxal::contracts::component::camera as oak_contract;
 use prost::Message;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,8 +60,8 @@ pub(super) fn encode_camera_observation(
         )));
     }
     let encoding = match encoding {
-        CameraEncoding::Mono8 => oak_contract::ImageEncoding::Mono8 as i32,
-        CameraEncoding::Rgb8 => oak_contract::ImageEncoding::Rgb8 as i32,
+        CameraEncoding::Mono8 => oak_contract::ImageEncoding::Mono8,
+        CameraEncoding::Rgb8 => oak_contract::ImageEncoding::Rgb8,
     };
     let width_px = u32::try_from(width).map_err(|_| {
         NativeProviderError::InvalidPayload(format!(
@@ -104,9 +103,7 @@ pub(super) fn encode_depth_observation(
     let workspace = render_workspace.ok_or_else(|| {
         NativeProviderError::Unsupported(format!(
             "provider {service_instance}/{} has no native renderer workspace",
-            oak_contract::oak_d_lite::methods::DEPTH
-                .signature()
-                .endpoint
+            crate::contract::simulator_api::DEPTH.signature().endpoint
         ))
     })?;
     let rendered = workspace
@@ -122,17 +119,13 @@ pub(super) fn encode_depth_observation(
     let expected_len = width.checked_mul(height).ok_or_else(|| {
         NativeProviderError::InvalidPayload(format!(
             "provider {service_instance}/{} camera resolution overflows depth payload size",
-            oak_contract::oak_d_lite::methods::DEPTH
-                .signature()
-                .endpoint
+            crate::contract::simulator_api::DEPTH.signature().endpoint
         ))
     })?;
     if depth_mm.len() != expected_len {
         return Err(NativeProviderError::InvalidPayload(format!(
             "provider {service_instance}/{} renderer returned {} depth values, expected {expected_len}",
-            oak_contract::oak_d_lite::methods::DEPTH
-                .signature()
-                .endpoint,
+            crate::contract::simulator_api::DEPTH.signature().endpoint,
             depth_mm.len()
         )));
     }
@@ -140,17 +133,13 @@ pub(super) fn encode_depth_observation(
         width_px: u32::try_from(width).map_err(|_| {
             NativeProviderError::InvalidPayload(format!(
                 "provider {service_instance}/{} camera width does not fit u32",
-                oak_contract::oak_d_lite::methods::DEPTH
-                    .signature()
-                    .endpoint
+                crate::contract::simulator_api::DEPTH.signature().endpoint
             ))
         })?,
         height_px: u32::try_from(height).map_err(|_| {
             NativeProviderError::InvalidPayload(format!(
                 "provider {service_instance}/{} camera height does not fit u32",
-                oak_contract::oak_d_lite::methods::DEPTH
-                    .signature()
-                    .endpoint
+                crate::contract::simulator_api::DEPTH.signature().endpoint
             ))
         })?,
         depth_mm,
@@ -158,7 +147,7 @@ pub(super) fn encode_depth_observation(
     encode_observation(
         providers,
         service_instance,
-        oak_contract::oak_d_lite::methods::DEPTH.signature(),
+        crate::contract::simulator_api::DEPTH.signature(),
         state,
         quantum_ns,
         frame.encode_to_vec(),
@@ -172,7 +161,7 @@ pub(super) fn rgb_to_mono8(rgb: &[u8]) -> Result<Vec<u8>, NativeProviderError> {
         ));
     }
     let mut mono = Vec::with_capacity(rgb.len() / 3);
-    for pixel in rgb.chunks_exact(3) {
+    for pixel in rgb.as_chunks::<3>().0 {
         let value = 77_u16
             .saturating_mul(pixel[0] as u16)
             .saturating_add(150_u16.saturating_mul(pixel[1] as u16))

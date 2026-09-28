@@ -1,6 +1,6 @@
 use super::*;
-use crate::api::__contracts::phoxal::component::bno085::v1 as imu;
 use crate::mujoco::Workspace;
+use phoxal::contracts::component::imu;
 use std::collections::BTreeMap;
 
 fn model(xml: &str) -> Model {
@@ -54,13 +54,13 @@ fn encoder_si_and_bounded_servo_force_survive_direction_and_mount_rotation() {
             &model,
             vec![provider_requirement(
                 "wheel",
-                ddsm115_contract::ddsm115::methods::ENCODER,
+                crate::contract::simulator_api::ENCODER,
             )],
             ObservationBinding::ddsm115_encoder_joint("wheel", "rotor"),
             Some(NativeControlMode::Velocity),
         );
         let force = model
-            .bind_sensor(ddsm115_contract::ddsm115::methods::ENCODER, "force")
+            .bind_sensor(crate::contract::simulator_api::ENCODER, "force")
             .unwrap();
         let mut workspace = Workspace::new(&model).unwrap();
         for direction in [-1.0, 1.0] {
@@ -72,9 +72,10 @@ fn encoder_si_and_bounded_servo_force_survive_direction_and_mount_rotation() {
             let observations = provider
                 .observations(&model, &workspace.snapshot().unwrap(), 2_000_000)
                 .unwrap();
-            let sample =
-                phoxal::robotics::EncoderSample::decode(observations[0].payload.as_slice())
-                    .unwrap();
+            let sample = phoxal::contracts::component::encoder::EncoderSample::decode(
+                observations[0].payload.as_slice(),
+            )
+            .unwrap();
             assert!(
                 (sample.position_rad.unwrap() - direction * std::f64::consts::FRAC_PI_2).abs()
                     < 1e-9
@@ -119,7 +120,10 @@ fn imu_mount_and_post_step_specific_force_are_encoded_in_sensor_coordinates() {
         ));
         let mut provider = provider(
             &model,
-            vec![provider_requirement("sensor", imu::bno085::methods::IMU)],
+            vec![provider_requirement(
+                "sensor",
+                crate::contract::simulator_api::IMU,
+            )],
             ObservationBinding::bno085_at_site(
                 "sensor",
                 "imu",
@@ -166,7 +170,6 @@ fn imu_mount_and_post_step_specific_force_are_encoded_in_sensor_coordinates() {
 
 #[test]
 fn finite_fov_selects_off_axis_nearest_return_and_reports_no_hit() {
-    use crate::api::__contracts::phoxal::component::vl53l1x::v1 as range;
     for (angle, wall, expected) in [
         (0.3_f64, true, Some(1.0)),
         (0.8, true, Some(2.0)),
@@ -189,7 +192,7 @@ fn finite_fov_selects_off_axis_nearest_return_and_reports_no_hit() {
             &model,
             vec![provider_requirement(
                 "sensor",
-                range::vl53l1x::methods::RANGE,
+                crate::contract::simulator_api::RANGE,
             )],
             ObservationBinding::Vl53l1xRange {
                 service_instance: "sensor".into(),
@@ -204,8 +207,10 @@ fn finite_fov_selects_off_axis_nearest_return_and_reports_no_hit() {
         let observations = provider
             .observations(&model, &workspace.snapshot().unwrap(), 2_000_000)
             .unwrap();
-        let sample =
-            phoxal::robotics::RangeSample::decode(observations[0].payload.as_slice()).unwrap();
+        let sample = phoxal::contracts::component::range::RangeSample::decode(
+            observations[0].payload.as_slice(),
+        )
+        .unwrap();
         assert_eq!(sample.valid, expected.is_some());
         assert!(
             (sample.distance_m - expected.unwrap_or(0.0)).abs() < 0.001,
@@ -233,7 +238,7 @@ fn ecef([latitude, longitude, height]: [f64; 3]) -> [f64; 3] {
 
 #[test]
 fn gnss_uses_the_antenna_mount_and_preserves_centimetre_ecef_accuracy() {
-    use crate::api::__contracts::phoxal::component::zed_f9p::v1 as gnss;
+    use phoxal::contracts::component::gnss;
     let model = model(
         r#"<mujoco><option timestep="0.002"/>
         <worldbody><body name="sensor"><site name="antenna" pos="0 0 1"/></body></worldbody></mujoco>"#,
@@ -243,7 +248,10 @@ fn gnss_uses_the_antenna_mount_and_preserves_centimetre_ecef_accuracy() {
     assert!(reference.project([f64::MAX, f64::MAX, f64::MAX]).is_err());
     let mut provider = provider(
         &model,
-        vec![provider_requirement("sensor", gnss::zed_f9p::methods::GNSS)],
+        vec![provider_requirement(
+            "sensor",
+            crate::contract::simulator_api::GNSS,
+        )],
         ObservationBinding::zed_f9p("sensor", "antenna", reference),
         None,
     );
@@ -311,7 +319,7 @@ fn gnss_uses_the_antenna_mount_and_preserves_centimetre_ecef_accuracy() {
 
 #[test]
 fn camera_payloads_preserve_calibrated_projection_row_order_and_metric_depth() {
-    use crate::api::__contracts::phoxal::component::oak_d_lite::v1 as camera;
+    use phoxal::contracts::component::camera;
     let model = model(
         r#"<mujoco>
       <option timestep="0.002"/>
@@ -327,9 +335,9 @@ fn camera_payloads_preserve_calibrated_projection_row_order_and_metric_depth() {
       </worldbody></mujoco>"#,
     );
     let requirements = vec![
-        provider_requirement("camera", camera::oak_d_lite::methods::RGB),
-        provider_requirement("camera", camera::oak_d_lite::methods::LEFT_MONO),
-        provider_requirement("camera", camera::oak_d_lite::methods::DEPTH),
+        provider_requirement("camera", crate::contract::simulator_api::RGB),
+        provider_requirement("camera", crate::contract::simulator_api::LEFT_MONO),
+        provider_requirement("camera", crate::contract::simulator_api::DEPTH),
     ];
     let cadence = requirements
         .iter()
@@ -382,11 +390,11 @@ fn camera_payloads_preserve_calibrated_projection_row_order_and_metric_depth() {
     let depth = camera::DepthFrame::decode(payload("depth")).unwrap();
     assert_eq!(
         (rgb.width_px, rgb.height_px, rgb.encoding),
-        (96, 72, camera::ImageEncoding::Rgb8 as i32)
+        (96, 72, camera::ImageEncoding::Rgb8)
     );
     assert_eq!(
         (mono.width_px, mono.height_px, mono.encoding),
-        (96, 72, camera::ImageEncoding::Mono8 as i32)
+        (96, 72, camera::ImageEncoding::Mono8)
     );
     assert_eq!(mono.data, rgb_to_mono8(&rgb.data).unwrap());
     assert_eq!((depth.width_px, depth.height_px), (96, 72));
@@ -395,7 +403,9 @@ fn camera_payloads_preserve_calibrated_projection_row_order_and_metric_depth() {
     for (channel, x, y) in [(0, 0.5, 0.5), (2, -0.5, -0.5)] {
         let pixels = rgb
             .data
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(_, p)| u16::from(p[channel]) > 2 * u16::from(p[1]) && p[channel] > 80)
             .map(|(i, _)| ((i % 96) as f64, (i / 96) as f64))

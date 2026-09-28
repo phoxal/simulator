@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use mujoco_rs::prelude::{MjModel, MjtBias, MjtGain, MjtJoint, MjtObj, MjtSensor, MjtTrn};
 use mujoco_rs::wrappers::MjVfs;
-use phoxal::contract::{MethodDescriptor, MethodShape, MethodSignature};
+use phoxal::contracts::{MethodDescriptor, MethodShape, MethodSignature};
 
 use crate::mujoco::artifact::ClosedModel;
 use crate::mujoco::error::ModelError;

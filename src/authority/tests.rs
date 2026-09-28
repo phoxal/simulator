@@ -1,6 +1,5 @@
 use super::*;
 use phoxal::communication::session::MethodShape;
-use phoxal::contract::MethodDescriptor;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Default)]
@@ -103,18 +102,18 @@ impl SimulationTransport for Peer {
     ) -> SimulationFuture<'_, PrepareBoundaryResponse, String> {
         Box::pin(async move {
             let key = r.transition_key.as_ref().unwrap();
-            let payload = crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint {
-                targets: vec![crate::api::__contracts::phoxal::motion::v1::ActuatorTarget {
+            let payload = phoxal::contracts::component::actuator::ActuatorSetpoint {
+                targets: vec![phoxal::contracts::component::actuator::ActuatorTarget {
                     actuator_id: "motor".into(),
                     control: Some(
-                        crate::api::__contracts::phoxal::motion::v1::actuator_target::Control::VelocityRadps(1.0),
+                        phoxal::contracts::component::actuator::Control::VelocityRadps(1.0),
                     ),
                 }],
             }
             .encode_to_vec();
             let member = ProductMembership {
                 producer: "motion".into(),
-                port: crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS
+                port: crate::contract::simulator_api::ACTUATORS
                     .signature()
                     .endpoint
                     .into(),
@@ -220,8 +219,7 @@ impl SimulationTransport for Peer {
 }
 
 fn providers() -> ProviderSet {
-    let port = crate::api::__contracts::phoxal::component::ddsm115::v1::ddsm115::methods::ENCODER
-        .signature();
+    let port = crate::contract::simulator_api::ENCODER.signature();
     ProviderSet::new(vec![ProviderRequirement {
         rate_microhertz: 500_000_000,
         service_instance: "wheel".into(),

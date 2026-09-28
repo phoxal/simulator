@@ -58,7 +58,8 @@ pub fn encode_encoder_observation(
     let shape = MethodShape::try_from(requirement.shape)
         .map_err(|_| NativeProviderError::InvalidPayload("provider shape is unknown".to_owned()))?;
     if shape != MethodShape::Observation
-        || requirement.payload_fqn != phoxal::robotics::EncoderSample::full_name()
+        || requirement.payload_fqn
+            != phoxal::contracts::component::encoder::EncoderSample::full_name()
     {
         return Err(NativeProviderError::InvalidPayload(
             "encoder observation does not match the generated robotics sample contract".to_owned(),
@@ -68,7 +69,7 @@ pub fn encode_encoder_observation(
         NativeProviderError::InvalidPayload(format!("model has no joint named {joint_id}"))
     })?;
     let info = model.joint_info(handle)?;
-    let sample = phoxal::robotics::EncoderSample {
+    let sample = phoxal::contracts::component::encoder::EncoderSample {
         position_rad: Some(state.qpos().get(info.qpos_offset).copied().ok_or_else(|| {
             NativeProviderError::InvalidPayload(format!(
                 "joint {joint_id} qpos offset is outside the state"

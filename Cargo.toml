@@ -29,7 +29,7 @@ phoxal = {
     registry = "phoxal",
     version = "=0.0.0-dev.3",
     default-features = false,
-    features = ["session", "artifact", "contract", "robotics"],
+    features = ["session", "runtime"],
 }
 prost = "0.14.4"
 
@@ -48,9 +48,6 @@ cgl = { version = "0.3.2", optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 glutin = { version = "0.32.3", default-features = false, features = ["egl"], optional = true }
-
-[build-dependencies]
-phoxal = { registry = "phoxal", version = "=0.0.0-dev.3", default-features = false, features = ["build"] }
 
 # Native model identity calculations must remain practical in debug builds.
 [profile.dev.package.sha2]

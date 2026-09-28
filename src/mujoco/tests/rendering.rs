@@ -34,7 +34,9 @@ fn native_camera_renders_rgb_and_metric_depth_from_a_private_workspace() {
     assert!(
         rendered
             .rgb()
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .all(|pixel| pixel[0] > pixel[1] && pixel[0] > pixel[2]),
         "red plane RGB: {:?}",
         rendered.rgb()

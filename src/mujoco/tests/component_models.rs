@@ -5,14 +5,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::api::__contracts::phoxal::component::bno085::v1 as bno085_contract;
-use crate::api::__contracts::phoxal::component::ddsm115::v1 as ddsm115_contract;
-use crate::api::__contracts::phoxal::component::oak_d_lite::v1 as oak_contract;
-use crate::api::__contracts::phoxal::component::vl53l1x::v1 as vl53l1x_contract;
-use crate::api::__contracts::phoxal::component::zed_f9p::v1 as zed_contract;
-use crate::api::__contracts::phoxal::motion::v1 as motion_contract;
 use crate::mujoco::{Model, Scene};
-use phoxal::contract::MethodDescriptor;
+use phoxal::contracts::MethodDescriptor;
 
 fn component_root(component: &str) -> PathBuf {
     let root = std::env::var_os("PHOXAL_COMPONENT_SOURCES")
@@ -150,17 +144,17 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
     }
     assert_sensor_binding(
         &bno085,
-        bno085_contract::bno085::methods::IMU,
+        crate::contract::simulator_api::IMU,
         "imu_orientation",
     );
     assert_sensor_binding(
         &bno085,
-        bno085_contract::bno085::methods::ACCELEROMETER,
+        crate::contract::simulator_api::ACCELEROMETER,
         "accelerometer",
     );
     assert_sensor_binding(
         &bno085,
-        bno085_contract::bno085::methods::GYROSCOPE,
+        crate::contract::simulator_api::GYROSCOPE,
         "gyroscope",
     );
     assert_eq!(
@@ -195,11 +189,7 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
             "DDSM115 signal {sensor} must remain model-owned"
         );
     }
-    assert_actuator_binding(
-        &ddsm115,
-        motion_contract::motion::methods::ACTUATORS,
-        "motor",
-    );
+    assert_actuator_binding(&ddsm115, crate::contract::simulator_api::ACTUATORS, "motor");
     assert_eq!(
         ddsm115
             .actuator_info(ddsm115.actuator("motor").unwrap().unwrap())
@@ -209,12 +199,12 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
     );
     assert_sensor_binding(
         &ddsm115,
-        ddsm115_contract::ddsm115::methods::ENCODER,
+        crate::contract::simulator_api::ENCODER,
         "encoder_position",
     );
     assert_sensor_binding(
         &ddsm115,
-        ddsm115_contract::ddsm115::methods::ENCODER,
+        crate::contract::simulator_api::ENCODER,
         "encoder_velocity",
     );
     assert_eq!(
@@ -264,40 +254,28 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
             "OAK-D Lite signal {sensor} must remain model-owned"
         );
     }
+    assert_camera_binding(&oak, crate::contract::simulator_api::LEFT_MONO, "left_mono");
+    assert_camera_binding(&oak, crate::contract::simulator_api::RGB, "rgb");
     assert_camera_binding(
         &oak,
-        oak_contract::oak_d_lite::methods::LEFT_MONO,
-        "left_mono",
-    );
-    assert_camera_binding(&oak, oak_contract::oak_d_lite::methods::RGB, "rgb");
-    assert_camera_binding(
-        &oak,
-        oak_contract::oak_d_lite::methods::RIGHT_MONO,
+        crate::contract::simulator_api::RIGHT_MONO,
         "right_mono",
     );
-    assert_camera_binding(&oak, oak_contract::oak_d_lite::methods::DEPTH, "depth");
+    assert_camera_binding(&oak, crate::contract::simulator_api::DEPTH, "depth");
+    assert_sensor_binding(&oak, crate::contract::simulator_api::IMU, "imu_orientation");
     assert_sensor_binding(
         &oak,
-        oak_contract::oak_d_lite::methods::IMU,
-        "imu_orientation",
-    );
-    assert_sensor_binding(
-        &oak,
-        oak_contract::oak_d_lite::methods::ACCELEROMETER,
+        crate::contract::simulator_api::ACCELEROMETER,
         "accelerometer",
     );
-    assert_sensor_binding(
-        &oak,
-        oak_contract::oak_d_lite::methods::GYROSCOPE,
-        "gyroscope",
-    );
+    assert_sensor_binding(&oak, crate::contract::simulator_api::GYROSCOPE, "gyroscope");
 
     let vl53l1x =
         Model::from_file(component_root("vl53l1x").join("model.xml")).expect("VL53L1X model");
     assert!(vl53l1x.body("sensor_link").unwrap().is_some());
     assert!(vl53l1x.site("sensor_site").unwrap().is_some());
     assert!(vl53l1x.sensor("range").unwrap().is_some());
-    assert_sensor_binding(&vl53l1x, vl53l1x_contract::vl53l1x::methods::RANGE, "range");
+    assert_sensor_binding(&vl53l1x, crate::contract::simulator_api::RANGE, "range");
     assert_eq!(
         vl53l1x
             .sensor_info(vl53l1x.sensor("range").unwrap().unwrap())
@@ -309,7 +287,7 @@ fn official_models_keep_capability_targets_and_native_signal_names() {
     let zed = Model::from_file(component_root("zed_f9p").join("model.xml")).expect("ZED-F9P model");
     assert!(zed.body("sensor_link").unwrap().is_some());
     assert!(zed.site("sensor_site").unwrap().is_some());
-    assert_site_binding(&zed, zed_contract::zed_f9p::methods::GNSS, "sensor_site");
+    assert_site_binding(&zed, crate::contract::simulator_api::GNSS, "sensor_site");
 }
 
 #[test]
@@ -318,7 +296,7 @@ fn native_bindings_fail_closed_for_wrong_kinds_and_missing_objects() {
         Model::from_file(component_root("bno085").join("model.xml")).expect("BNO085 model");
 
     let wrong_kind = bno085
-        .bind_sensor(motion_contract::motion::methods::ACTUATORS, "accelerometer")
+        .bind_sensor(crate::contract::simulator_api::ACTUATORS, "accelerometer")
         .expect_err("a consuming setpoint cannot serve as a sensor sample");
     assert!(matches!(
         wrong_kind,
@@ -329,7 +307,7 @@ fn native_bindings_fail_closed_for_wrong_kinds_and_missing_objects() {
     ));
 
     let missing = bno085
-        .bind_sensor(bno085_contract::bno085::methods::IMU, "not_in_the_model")
+        .bind_sensor(crate::contract::simulator_api::IMU, "not_in_the_model")
         .expect_err("a missing native source must not be fabricated");
     assert!(matches!(
         missing,
@@ -349,7 +327,7 @@ fn native_bindings_read_only_from_their_own_model_snapshot() {
         .snapshot()
         .expect("BNO085 snapshot");
     let imu = bno085
-        .bind_sensor(bno085_contract::bno085::methods::IMU, "imu_orientation")
+        .bind_sensor(crate::contract::simulator_api::IMU, "imu_orientation")
         .expect("BNO085 IMU binding");
     assert_eq!(
         imu.values(&bno085_snapshot).unwrap().len(),
@@ -363,14 +341,11 @@ fn native_bindings_read_only_from_their_own_model_snapshot() {
         .snapshot()
         .expect("DDSM115 snapshot");
     let actuator = ddsm115
-        .bind_actuator(motion_contract::motion::methods::ACTUATORS, "motor")
+        .bind_actuator(crate::contract::simulator_api::ACTUATORS, "motor")
         .expect("DDSM115 actuator binding");
     assert_eq!(actuator.control(&ddsm115_snapshot).unwrap(), 0.0);
     let encoder = ddsm115
-        .bind_sensor(
-            ddsm115_contract::ddsm115::methods::ENCODER,
-            "encoder_velocity",
-        )
+        .bind_sensor(crate::contract::simulator_api::ENCODER, "encoder_velocity")
         .expect("DDSM115 encoder binding");
     assert_eq!(encoder.values(&ddsm115_snapshot).unwrap().len(), 1);
 
@@ -380,7 +355,7 @@ fn native_bindings_read_only_from_their_own_model_snapshot() {
         .snapshot()
         .expect("ZED-F9P snapshot");
     let antenna = zed
-        .bind_site(zed_contract::zed_f9p::methods::GNSS, "sensor_site")
+        .bind_site(crate::contract::simulator_api::GNSS, "sensor_site")
         .expect("ZED-F9P antenna binding");
     assert_eq!(antenna.position(&zed_snapshot).unwrap(), [0.0, 0.0, 0.01]);
 
@@ -451,7 +426,7 @@ fn component_facing_target(component: &str) -> Result<Model, Box<dyn std::error:
 fn authored_range_sensor_faces_forward_in_the_component_mount_frame() {
     let model = component_facing_target("vl53l1x").unwrap();
     let binding = model
-        .bind_sensor(vl53l1x_contract::vl53l1x::methods::RANGE, "sensor__range")
+        .bind_sensor(crate::contract::simulator_api::RANGE, "sensor__range")
         .unwrap();
     let state = Scene::new(model).unwrap().snapshot().unwrap();
     let range = binding.values(&state).unwrap()[0];
@@ -468,7 +443,7 @@ fn authored_camera_frames_face_forward_and_preserve_the_known_target_depth() {
     let snapshot = Scene::new(model.clone()).unwrap().snapshot().unwrap();
     let left = model
         .bind_site(
-            oak_contract::oak_d_lite::methods::LEFT_MONO,
+            crate::contract::simulator_api::LEFT_MONO,
             "sensor__left_mono_site",
         )
         .unwrap()
@@ -476,7 +451,7 @@ fn authored_camera_frames_face_forward_and_preserve_the_known_target_depth() {
         .unwrap();
     let right = model
         .bind_site(
-            oak_contract::oak_d_lite::methods::RIGHT_MONO,
+            crate::contract::simulator_api::RIGHT_MONO,
             "sensor__right_mono_site",
         )
         .unwrap()
@@ -494,7 +469,9 @@ fn authored_camera_frames_face_forward_and_preserve_the_known_target_depth() {
         let center = (height / 2) * width + width / 2;
         let blue_rows = rendered
             .rgb()
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(_, pixel)| pixel[2] > pixel[0] && pixel[2] > pixel[1])
             .map(|(index, _)| index / width)

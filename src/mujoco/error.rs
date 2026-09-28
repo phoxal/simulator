@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[cfg(feature = "native")]
 use crate::mujoco::ModelIdentity;
 #[cfg(feature = "native")]
-use phoxal::contract::MethodShape;
+use phoxal::contracts::MethodShape;
 
 /// Errors raised while validating a closed MJCF/resource artifact.
 #[derive(Debug, thiserror::Error)]

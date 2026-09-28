@@ -1,11 +1,5 @@
 use super::geodesy::Georeference;
-use crate::api::__contracts::phoxal::component::bno085::v1 as bno085_contract;
-use crate::api::__contracts::phoxal::component::ddsm115::v1 as ddsm115_contract;
-use crate::api::__contracts::phoxal::component::oak_d_lite::v1 as oak_contract;
-use crate::api::__contracts::phoxal::component::vl53l1x::v1 as vl53l1x_contract;
-use crate::api::__contracts::phoxal::component::zed_f9p::v1 as zed_contract;
 use crate::remote::NativeProviderError;
-use phoxal::contract::MethodDescriptor;
 
 /// Explicit native control semantics for a configured actuator.
 ///
@@ -53,7 +47,7 @@ pub struct ActuationDeclaration {
     /// Service instance owning the output.
     pub service_instance: String,
     /// Generated motion output port.  The convenience constructor fills this
-    /// from `crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS`.
+    /// from `crate::contract::simulator_api::ACTUATORS`.
     pub port: String,
     /// Generated motion payload FQN.
     pub payload_fqn: String,
@@ -70,11 +64,11 @@ impl ActuationDeclaration {
     ) -> Self {
         Self {
             service_instance: service_instance.into(),
-            port: crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS
+            port: crate::contract::simulator_api::ACTUATORS
                 .signature()
                 .endpoint
                 .to_owned(),
-            payload_fqn: crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS
+            payload_fqn: crate::contract::simulator_api::ACTUATORS
                 .signature()
                 .response
                 .to_owned(),
@@ -268,7 +262,7 @@ impl ObservationBinding {
         let orientation_sensor = orientation_sensor.into();
         let accelerometer_sensor = accelerometer_sensor.into();
         let gyroscope_sensor = gyroscope_sensor.into();
-        if payload_fqn == bno085_contract::bno085::methods::IMU.signature().response {
+        if payload_fqn == crate::contract::simulator_api::IMU.signature().response {
             Ok(Self::bno085_at_site(
                 service_instance,
                 sensor_site,
@@ -277,7 +271,7 @@ impl ObservationBinding {
                 accelerometer_sensor,
                 gyroscope_sensor,
             ))
-        } else if payload_fqn == oak_contract::oak_d_lite::methods::IMU.signature().response {
+        } else if payload_fqn == crate::contract::simulator_api::IMU.signature().response {
             Ok(Self::oak_imu_at_site(
                 service_instance,
                 sensor_site,
@@ -302,11 +296,7 @@ impl ObservationBinding {
     ) -> Result<Self, NativeProviderError> {
         let service_instance = service_instance.into();
         let native_joint = native_joint.into();
-        if payload_fqn
-            == ddsm115_contract::ddsm115::methods::ENCODER
-                .signature()
-                .response
-        {
+        if payload_fqn == crate::contract::simulator_api::ENCODER.signature().response {
             Ok(Self::ddsm115_encoder_joint(service_instance, native_joint))
         } else {
             Err(NativeProviderError::Unsupported(format!(
@@ -327,14 +317,14 @@ impl ObservationBinding {
         let service_instance = service_instance.into();
         let native_camera = native_camera.into();
         if payload_fqn
-            != oak_contract::oak_d_lite::methods::LEFT_MONO
+            != crate::contract::simulator_api::LEFT_MONO
                 .signature()
                 .response
             && payload_fqn
-                != oak_contract::oak_d_lite::methods::RIGHT_MONO
+                != crate::contract::simulator_api::RIGHT_MONO
                     .signature()
                     .response
-            && payload_fqn != oak_contract::oak_d_lite::methods::RGB.signature().response
+            && payload_fqn != crate::contract::simulator_api::RGB.signature().response
         {
             return Err(NativeProviderError::Unsupported(format!(
                 "semantic camera route has unsupported generated payload {payload_fqn}"
@@ -367,11 +357,7 @@ impl ObservationBinding {
         payload_fqn: &str,
         range_m: [f64; 2],
     ) -> Result<Self, NativeProviderError> {
-        if payload_fqn
-            != oak_contract::oak_d_lite::methods::DEPTH
-                .signature()
-                .response
-        {
+        if payload_fqn != crate::contract::simulator_api::DEPTH.signature().response {
             return Err(NativeProviderError::Unsupported(format!(
                 "semantic depth route has unsupported generated payload {payload_fqn}"
             )));
@@ -393,11 +379,7 @@ impl ObservationBinding {
         fov_rad: f64,
         payload_fqn: &str,
     ) -> Result<Self, NativeProviderError> {
-        if payload_fqn
-            != vl53l1x_contract::vl53l1x::methods::RANGE
-                .signature()
-                .response
-        {
+        if payload_fqn != crate::contract::simulator_api::RANGE.signature().response {
             return Err(NativeProviderError::Unsupported(format!(
                 "semantic range route has unsupported generated payload {payload_fqn}"
             )));
@@ -419,7 +401,7 @@ impl ObservationBinding {
         georeference: Georeference,
         payload_fqn: &str,
     ) -> Result<Self, NativeProviderError> {
-        if payload_fqn != zed_contract::zed_f9p::methods::GNSS.signature().response {
+        if payload_fqn != crate::contract::simulator_api::GNSS.signature().response {
             return Err(NativeProviderError::Unsupported(format!(
                 "semantic GNSS route has unsupported generated payload {payload_fqn}"
             )));

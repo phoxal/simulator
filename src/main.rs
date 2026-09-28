@@ -1,4 +1,4 @@
-phoxal::api!();
+mod contract;
 
 mod authority;
 mod bindings;

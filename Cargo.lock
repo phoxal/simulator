@@ -3394,12 +3394,18 @@ dependencies = [
 name = "phoxal"
 version = "0.0.0-dev.3"
 dependencies = [
+ "anyhow",
+ "clap",
  "getrandom 0.3.4",
  "phoxal-build",
+ "phoxal-macros",
  "prost",
+ "prost-reflect",
+ "prost-types",
  "serde",
  "serde_bytes",
  "serde_json",
+ "serde_yaml",
  "sha2",
  "thiserror 2.0.20",
  "tokio",
@@ -3427,6 +3433,17 @@ dependencies = [
  "sha2",
  "syn 2.0.119",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "phoxal-macros"
+version = "0.0.0-dev.3"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals 0.29.1",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -4326,7 +4343,7 @@ checksum = "d98c67716b46af2f0b8cf752abc930f6f9aecfbf671ecfb531db8a31dbe4e2ba"
 dependencies = [
  "proc-macro2",
  "quote",
- "serde_derive_internals",
+ "serde_derive_internals 0.30.0",
  "syn 3.0.6",
 ]
 
@@ -4425,6 +4442,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

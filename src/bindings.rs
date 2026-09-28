@@ -18,7 +18,6 @@ use phoxal::artifact::bundle::{
 use phoxal::artifact::document::{CapabilityDeclaration, NativeTargetKind};
 use phoxal::artifact::{MethodShape, OutputRecord, OutputRole, RuntimeRecord};
 use phoxal::communication::simulation::ProviderRequirement;
-use phoxal::contract::MethodDescriptor;
 use prost::Name;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -230,10 +229,7 @@ pub(super) fn generated_actuation_facts(
                 capability_target = capability.target.id
             );
             model
-                .bind_actuator(
-                    crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS,
-                    &native_name,
-                )
+                .bind_actuator(crate::contract::simulator_api::ACTUATORS, &native_name)
                 .map_err(|error| format!("actuator binding {native_name}: {error}"))?;
             targets.push(format!("{instance}.{capability_name}"));
         }
@@ -273,11 +269,11 @@ pub(super) fn generated_actuation_facts(
                 )
             })?;
             if port
-                != crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS
+                != crate::contract::simulator_api::ACTUATORS
                     .signature()
                     .endpoint
                 || signature.response
-                    != crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint::full_name()
+                    != phoxal::contracts::component::actuator::ActuatorSetpoint::full_name()
             {
                 // Intermediate service intents are ordinary graph traffic.
                 // Only native actuator products belong in the physics input cut.
@@ -331,11 +327,11 @@ pub(super) fn build_provider(
         .iter()
         .map(|binding| {
             if binding.port
-                != crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS
+                != crate::contract::simulator_api::ACTUATORS
                     .signature()
                     .endpoint
                 || binding.payload_fqn
-                    != crate::api::__contracts::phoxal::motion::v1::ActuatorSetpoint::full_name()
+                    != phoxal::contracts::component::actuator::ActuatorSetpoint::full_name()
             {
                 return Err(format!(
                     "simulation actuation {}/{} does not use generated motion constants",
@@ -368,10 +364,7 @@ pub(super) fn build_provider(
                         capability.target.id
                     );
                     let native = model
-                        .bind_actuator(
-                            crate::api::__contracts::phoxal::motion::v1::motion::methods::ACTUATORS,
-                            &native_name,
-                        )
+                        .bind_actuator(crate::contract::simulator_api::ACTUATORS, &native_name)
                         .map_err(|error| format!("actuator binding {actuator_id}: {error}"))?;
                     let mode = match native.info.mode {
                         crate::mujoco::ActuatorMode::Torque => NativeControlMode::Torque,
