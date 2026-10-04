@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/phoxal/simulator/compare/phoxal-simulator-v0.1.1...phoxal-simulator-v0.1.2) - 2026-10-04
+
+### Fixed
+
+- *(simulator)* propagate supervisor shutdown failures
+
+### Other
+
+- *(simulator)* publish shutdown fixture readiness atomically
+- *(simulator)* qualify clean public installs without MuJoCo
+
 ## [0.1.1](https://github.com/phoxal/simulator/compare/phoxal-simulator-v0.1.0...phoxal-simulator-v0.1.1) - 2026-10-04
 
 ### Fixed
