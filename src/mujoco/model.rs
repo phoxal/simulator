@@ -4,8 +4,10 @@ use std::ffi::{CStr, CString};
 use std::fmt;
 use std::sync::Arc;
 
-use mujoco_rs::prelude::{MjModel, MjtBias, MjtGain, MjtJoint, MjtObj, MjtSensor, MjtTrn};
-use mujoco_rs::wrappers::MjVfs;
+use crate::native_binding::prelude::{
+    MjModel, MjtBias, MjtGain, MjtJoint, MjtObj, MjtSensor, MjtTrn,
+};
+use crate::native_binding::wrappers::MjVfs;
 use phoxal::contracts::{MethodDescriptor, MethodShape, MethodSignature};
 
 use crate::mujoco::artifact::ClosedModel;
@@ -59,7 +61,7 @@ impl Model {
     /// The caller owns the editing/specification lifetime and must provide the
     /// identity of the complete source selection used for the compilation.
     /// This is crate-private because a public caller must enter through a
-    /// closed artifact or [`crate::ModelComposition`].
+    /// closed artifact or [`super::ModelComposition`].
     pub(crate) fn from_compiled(
         artifact: ClosedModel,
         model: MjModel,
@@ -101,7 +103,7 @@ impl Model {
     /// Returns the MuJoCo version linked by the pinned binding.
     #[must_use]
     pub fn native_version() -> &'static str {
-        mujoco_rs::mujoco_version()
+        crate::native_binding::mujoco_version()
     }
 
     /// Returns the source-authored native physics timestep in seconds.

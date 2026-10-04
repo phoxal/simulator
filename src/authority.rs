@@ -530,7 +530,7 @@ impl<T: SimulationTransport> AuthorityClient<T> {
         };
         if receipt.transition_key.as_ref() != Some(&pending.key)
             || receipt.correlation_id != pending.correlation
-            || receipt.status != pending.status as i32
+            || receipt.status != pending.status
             || receipt.membership_digest != membership_digest(&products)
             || membership_digest(&receipt.products) != membership_digest(&products)
             || receipt.prepared_boundary != self.boundary

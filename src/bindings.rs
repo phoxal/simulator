@@ -12,11 +12,12 @@ use crate::native_provider::ObservationBinding;
 use crate::remote::ProviderSet;
 use crate::remote::SIMULATION_PROTOCOL;
 use crate::remote::quantum_nanoseconds;
+use phoxal::artifact::bundle::InstanceRole;
 use phoxal::artifact::bundle::{
     BundleActuationBinding, BundleSimulation, BundleSimulationProvider,
 };
 use phoxal::artifact::document::{CapabilityDeclaration, NativeTargetKind};
-use phoxal::artifact::{MethodShape, OutputRecord, OutputRole, RuntimeRecord};
+use phoxal::artifact::{MethodShape, OutputRecord, RuntimeRecord};
 use phoxal::communication::simulation::ProviderRequirement;
 use prost::Name;
 use serde::Serialize;
@@ -58,12 +59,8 @@ pub(super) struct ProbeFacts {
 }
 
 fn runtime_outputs(runtime: &RuntimeRecord) -> impl Iterator<Item = &OutputRecord> {
-    let RuntimeRecord::V0 {
-        transient_outputs,
-        service_outputs,
-        ..
-    } = runtime;
-    transient_outputs.iter().chain(service_outputs)
+    let RuntimeRecord::V0 { outputs, .. } = runtime;
+    outputs.iter()
 }
 
 pub(super) fn probe_contract(bundle: &BundleFacts, model: &Model) -> Result<ProbeContract, String> {
@@ -112,54 +109,45 @@ pub(super) fn probe_contract(bundle: &BundleFacts, model: &Model) -> Result<Prob
 }
 
 pub(super) fn generated_provider_facts(bundle: &BundleFacts) -> Result<Vec<ProbeProvider>, String> {
-    let driver_instances = bundle
-        .robot
-        .components
-        .iter()
-        .filter_map(|(instance, selection)| selection.driver.as_ref().map(|_| instance.as_str()))
-        .collect::<BTreeSet<_>>();
     let mut providers = Vec::new();
-    for executable in &bundle.executables {
-        if executable.role != "driver" || !driver_instances.contains(executable.instance.as_str()) {
+    for (instance_id, instance) in &bundle.instances {
+        let Some(record) = bundle.runtime_record(instance_id) else {
+            continue;
+        };
+        if instance.role != InstanceRole::Driver
+            || !bundle
+                .components
+                .get(instance_id)
+                .is_some_and(|component| component.driver)
+        {
             continue;
         }
-        let artifact = executable.artifact.as_ref().ok_or_else(|| {
-            format!(
-                "selected driver {} has no retained generated artifact contract",
-                executable.instance
-            )
-        })?;
-        for output in runtime_outputs(&artifact.runtime) {
-            let Some(signature) = output.signature.as_ref().filter(|signature| {
-                output.role == OutputRole::Method && signature.shape == MethodShape::Observation
-            }) else {
+        for output in runtime_outputs(record) {
+            let Some(signature) = output
+                .signature
+                .as_ref()
+                .filter(|signature| signature.shape == MethodShape::Observation)
+            else {
                 continue;
             };
             let port = output.port.as_ref().ok_or_else(|| {
-                format!(
-                    "observation output on {} has no generated port",
-                    executable.instance
-                )
+                format!("observation output on {instance_id} has no generated port")
             })?;
             let component = bundle
                 .components
-                .iter()
-                .find(|component| component.instance == executable.instance)
-                .ok_or_else(|| format!("provider {} has no component", executable.instance))?;
+                .get(instance_id)
+                .ok_or_else(|| format!("provider {instance_id} has no component"))?;
             let capability = component_definition(&component.definition)
                 .1
-                .get(port)
+                .get(port.as_str())
                 .ok_or_else(|| {
-                    format!(
-                        "provider {}/{} has no declared capability",
-                        executable.instance, port
-                    )
+                    format!("provider {instance_id}/{port} has no declared capability")
                 })?;
-            let rate = semantic_number(capability, "publish_rate_hz", &executable.instance)?;
+            let rate = semantic_number(capability, "publish_rate_hz", instance_id)?;
             let cadence = Cadence::new(rate, 1).map_err(|error| error.to_string())?;
             providers.push(ProbeProvider {
                 rate_microhertz: cadence.rate_microhertz(),
-                service_instance: executable.instance.clone(),
+                service_instance: instance_id.clone(),
                 port: port.clone(),
                 shape: signature.shape,
                 service_fqn: signature.service.clone(),
@@ -204,15 +192,10 @@ pub(super) fn generated_actuation_facts(
     model: &Model,
 ) -> Result<Vec<ProbeActuation>, String> {
     let mut targets = Vec::new();
-    for (instance, selection) in &bundle.robot.components {
-        if selection.driver.is_none() {
+    for (instance, component) in &bundle.components {
+        if !component.driver {
             continue;
         }
-        let component = bundle
-            .components
-            .iter()
-            .find(|component| component.instance == *instance)
-            .ok_or_else(|| format!("component {instance} has no resolved bundle record"))?;
         for (capability_name, capability) in component_definition(&component.definition).1 {
             if capability.kind != "motor" {
                 continue;
@@ -243,30 +226,23 @@ pub(super) fn generated_actuation_facts(
         );
     }
     let mut outputs = Vec::new();
-    for executable in &bundle.executables {
-        let Some(artifact) = &executable.artifact else {
+    for instance in bundle.instances.keys() {
+        let Some(record) = bundle.runtime_record(instance) else {
             continue;
         };
-        for output in runtime_outputs(&artifact.runtime) {
-            if output.role != OutputRole::Method
-                || !output.signature.as_ref().is_some_and(|signature| {
-                    signature.shape == MethodShape::Observation
-                        && signature.lease_valid_for_ms.is_some()
-                })
-            {
+        for output in runtime_outputs(record) {
+            if !output.signature.as_ref().is_some_and(|signature| {
+                signature.shape == MethodShape::Observation
+                    && signature.lease_valid_for_ms.is_some()
+            }) {
                 continue;
             }
-            let port = output.port.as_deref().ok_or_else(|| {
-                format!(
-                    "setpoint output on {} has no generated port",
-                    executable.instance
-                )
-            })?;
+            let port = output
+                .port
+                .as_deref()
+                .ok_or_else(|| format!("setpoint output on {instance} has no generated port"))?;
             let signature = output.signature.as_ref().ok_or_else(|| {
-                format!(
-                    "setpoint output {}/{} has no generated signature",
-                    executable.instance, port
-                )
+                format!("setpoint output {instance}/{port} has no generated signature")
             })?;
             if port
                 != crate::contract::simulator_api::ACTUATORS
@@ -280,7 +256,7 @@ pub(super) fn generated_actuation_facts(
                 continue;
             }
             outputs.push(ProbeActuation {
-                service_instance: executable.instance.clone(),
+                service_instance: instance.clone(),
                 port: port.to_owned(),
                 payload_fqn: signature.response.clone(),
                 actuator_ids: targets.clone(),
@@ -348,8 +324,7 @@ pub(super) fn build_provider(
                         })?;
                     let component = bundle
                         .components
-                        .iter()
-                        .find(|c| c.instance == instance)
+                        .get(instance)
                         .ok_or_else(|| format!("actuator {actuator_id} has no component"))?;
                     let capability = component_definition(&component.definition)
                         .1
@@ -390,8 +365,7 @@ pub(super) fn build_provider(
         .map(|requirement| {
             let component = bundle
                 .components
-                .iter()
-                .find(|component| component.instance == requirement.service_instance)
+                .get(&requirement.service_instance)
                 .ok_or_else(|| {
                     format!("provider {} has no component", requirement.service_instance)
                 })?;
@@ -429,16 +403,11 @@ pub(super) fn observation_bindings(
     providers: &ProviderSet,
 ) -> Result<Vec<ObservationBinding>, String> {
     let mut bindings = Vec::new();
-    for (instance, component) in &bundle.robot.components {
-        if component.driver.is_none() {
+    for (instance, component) in &bundle.components {
+        if !component.driver {
             continue;
         }
-        let resolved = bundle
-            .components
-            .iter()
-            .find(|candidate| candidate.instance == *instance)
-            .ok_or_else(|| format!("component {instance} has no resolved bundle record"))?;
-        let capabilities = component_definition(&resolved.definition).1;
+        let capabilities = component_definition(&component.definition).1;
         let routes = providers
             .requirements()
             .iter()

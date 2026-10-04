@@ -1,10 +1,11 @@
 [package]
 name = "phoxal-simulator"
-version = "0.0.0-dev.2"
+version = "0.1.0"
 edition = "2024"
+build = "build.rs"
 rust-version = "1.95"
 license = "AGPL-3.0-only"
-publish = ["phoxal"]
+publish = true
 description = "Independent Phoxal MuJoCo simulator application."
 documentation = "https://docs.rs/phoxal-simulator"
 homepage = "https://github.com/phoxal/simulator"
@@ -17,41 +18,44 @@ required-features = ["rendering"]
 
 [features]
 default = ["rendering"]
-# The native feature is intentionally opt-in so hardware projects and the
-# generic framework can compile without a MuJoCo installation or rendering
-# stack. The simulator binary requires `native` and builds it by default.
-native = ["dep:mujoco-rs"]
+# Rendering is the application's default presentation support.
+# Native operations load the external MuJoCo library at runtime.
+native = []
 rendering = ["native", "dep:cgl", "dep:glutin"]
 
 [dependencies]
+libloading = "0.9"
+libc = "0.2"
+bytemuck = { version = "1.25.2", features = ["min_const_generics", "must_cast"] }
+paste = "1.0.15"
+log = "0.4"
 clap = { version = "4.6.1", features = ["derive"] }
-phoxal = {
-    registry = "phoxal",
-    version = "=0.0.0-dev.6",
-    default-features = false,
-    features = ["session", "runtime"],
-}
+phoxal = { version = "0.69.0", default-features = false, features = ["session", "runtime"] }
+
 prost = "0.14.4"
 
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.149"
-serde_yaml = "0.9.34"
 sha2 = "0.10.9"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "signal", "sync", "net"] }
 thiserror = "2.0.18"
-# `mujoco-rs` 6.0.1 is the binding release for MuJoCo 3.12.0.
-mujoco-rs = { version = "=6.0.1", optional = true, default-features = false }
 eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cgl = { version = "0.3.2", optional = true }
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 glutin = { version = "0.32.3", default-features = false, features = ["egl"], optional = true }
 
-# Native model identity calculations must remain practical in debug builds.
-[profile.dev.package.sha2]
-opt-level = 3
 
-[dev-dependencies]
-tempfile = "3"
+[dependencies.tempfile]
+version = "3"
+
+[build-dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+prettyplease = "0.2"
+
+[package.metadata.cargo-machete]
+# The package-local ABI generator uses these directly in build.rs.
+ignored = ["syn", "quote", "prettyplease"]

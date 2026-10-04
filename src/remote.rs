@@ -217,9 +217,9 @@ impl ProviderSet {
                     })?;
             if member.capture_boundary != boundary
                 || member.sequence == 0
-                || !match ProductDisposition::try_from(member.disposition) {
-                    Ok(ProductDisposition::Present) => member.item_count == 1,
-                    Ok(ProductDisposition::NotDue | ProductDisposition::Empty) => {
+                || !match member.disposition {
+                    ProductDisposition::Present => member.item_count == 1,
+                    ProductDisposition::NotDue | ProductDisposition::Empty => {
                         member.item_count == 0 && observation.payload.is_empty()
                     }
                     _ => false,
@@ -262,7 +262,7 @@ impl ProviderSet {
                     .map_err(|_| ProviderSetError::InvalidIdentifier {
                     field: "provider rate or quantum",
                 })?;
-            if cadence.due(boundary) == (member.disposition == ProductDisposition::NotDue as i32) {
+            if cadence.due(boundary) == (member.disposition == ProductDisposition::NotDue) {
                 return Err(ProviderSetError::InvalidIdentifier {
                     field: "observation capture cadence",
                 });
@@ -508,7 +508,7 @@ pub enum NativeProviderError {
 /// Bundle-selected and caller-selected provenance facts required for a run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProvenanceInput {
-    /// Immutable robot bundle identity or digest obtained from the selected bundle.
+    /// Authored robot identity obtained from the admitted bundle.
     robot_bundle_identity: String,
     /// Caller-selected finite run identity.
     run_id: String,
@@ -1046,7 +1046,7 @@ fn validate_actuation_bindings(
             || member.producer_incarnation.is_empty()
             || member.sequence == 0
             || member.item_count != 1
-            || member.disposition != ProductDisposition::Present as i32
+            || member.disposition != ProductDisposition::Present
             || member.encoded_bytes != item.payload.len() as u64
             || member.payload_digest != Sha256::digest(&item.payload).as_slice()
         {
@@ -1351,7 +1351,7 @@ mod provider_tests {
                     capture_boundary: boundary,
                     capture_time_ns: boundary * 2_000_000,
                     sequence: boundary + 1,
-                    disposition: disposition as i32,
+                    disposition,
                     payload_digest: Sha256::digest([]).to_vec(),
                     ..Default::default()
                 }),

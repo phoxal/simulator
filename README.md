@@ -1,153 +1,89 @@
 # Phoxal Simulator
 
-Phoxal's MuJoCo application owns one native scene and controls a robot through its supervisor's authenticated public simulation protocol.
-It is an independent Cargo workspace and executable.
-Its simulator-owned Rust messages and the SDK standard component contracts provide the payload types it needs, with Prost and retained Protobuf descriptors supplied by the framework.
-The simulator does not depend on service or component libraries to read a robot bundle; the bundle carries exact contract descriptors and participant provenance.
-The hardware supervisor and ordinary robot services do not depend on this application or initialize MuJoCo.
+`phoxal-simulator` owns native simulation, the desktop controls, supervisor launch and cleanup, and simulation evidence.
+Robot source preparation belongs to the separate `cargo-phoxal` command.
+Linux and macOS are supported.
+Windows is unsupported.
 
-Desktop and finite headless execution use the same coordinator.
-At each boundary, the coordinator obtains the accepted actuator cut, integrates one native quantum, captures due observations, and waits for their receiver-admission receipt.
-An unknown transition outcome or required process, capture, or delivery failure ends the run.
-The next attempt starts a fresh execution.
-
-## Installation boundary
-
-Normal robot projects do not depend on MuJoCo or this package.
-`cargo-phoxal` owns downloading and verifying MuJoCo, building the matching registry release, retaining native licenses and provenance, and maintaining the user installation.
-This repository owns only the native simulator application and assumes that its build has been given a valid MuJoCo library directory.
-This keeps host-specific native libraries out of robot dependency graphs and gives each simulator release one inspectable native identity.
-
-Normal users install and maintain the released application with:
+## Install
 
 ```sh
-cargo phoxal simulation install
-cargo phoxal simulation status
+cargo install phoxal-simulator
+cargo install cargo-phoxal
+phoxal-simulator --help
 ```
 
-Simulator developers may still build this repository from source and pass its executable with `--simulator`.
-When changing the framework and simulator together, build this application against the framework checkout with Cargo's local registry patch so both processes use the same in-progress contracts:
+Installation, help, version, and scene-resource staging do not require MuJoCo.
+The executable dynamically loads MuJoCo only for native operations.
+No native library is downloaded, installed, or bundled.
+
+Native simulation requires a user-managed MuJoCo **3.12.0** shared library and a working graphics environment for desktop rendering.
+The simulator checks the native version before accessing engine layouts or launching the supervisor.
+Unsupported versions and missing libraries produce simulator-owned errors.
+Set an explicit library file when it is outside the supported system locations:
 
 ```sh
-cargo build --locked --config 'patch.phoxal.phoxal.path="../framework/phoxal"'
+export PHOXAL_MUJOCO_LIBRARY=/path/to/libmujoco.3.12.0.dylib
 ```
 
-Run the framework's internal robot scenario from `framework/tests/robot` with the framework-built `cargo-phoxal` executable:
+Linux libraries normally use `libmujoco.so.3.12.0`.
+Discovery also tries the platform library search path, `/usr/local/lib`, the macOS Homebrew `/opt/homebrew/lib` directory, and the system MuJoCo framework.
+An explicit path takes precedence and is never silently replaced with another library.
+The internal binding adaptation retains the upstream licenses and generates typed runtime symbol dispatch from the original ABI declaration.
+The library stays loaded for all engine objects and their destruction.
+
+## Run a robot project
+
+From robot-rover:
 
 ```sh
-../../target/debug/cargo-phoxal test --locked --offline \
-  --simulator ../../../simulator/target/debug/phoxal-simulator \
-  forward_turn_stop -- --nocapture
+cargo phoxal simulation project
 ```
 
-Set the MuJoCo linker and loader environment described below for the source build and test run.
-The registry dependency in this repository remains the released simulator's selection.
+This opens a desktop simulation and starts advancing its scene.
+The simulator invokes the public `cargo phoxal build --simulation-scene simulation/scene.xml` command to prepare a temporary bundle, then owns its execution.
+`cargo phoxal simulation` is a thin process proxy to this application's parser, streams, and exit status.
+Use `--scene <file>` for another scene, `--steps <count>` for the finite bound, or `--paused` to open paused.
+The default bound is 10,000 native steps.
 
-## Build from source
+- **Pause / Run** suspends and resumes the current execution.
+- **Step** advances one native boundary while paused.
+- **Reset** resets the current execution while paused, including runtime reset and source-state handling.
+- **Stop** releases native authority and shuts down the supervisor and participants.
+- **Restart** becomes available after shutdown and starts a fresh execution from the same prepared scene.
+- Closing the window stops and joins the current execution.
 
-The initial native pairing is `mujoco-rs` 6.0.1 with MuJoCo 3.12.0.
-Install that native distribution and configure its library directory before building:
+The desktop shows simulation time, boundary, and generation alongside the actual scene.
+Hardware actuation is outside this simulation workflow.
+
+A prepared bundle can also be run directly:
 
 ```sh
-export MUJOCO_DYNAMIC_LINK_DIR=/opt/mujoco-3.12.0/lib
-export LD_LIBRARY_PATH="$MUJOCO_DYNAMIC_LINK_DIR"
-cargo build --locked
+phoxal-simulator run --bundle /path/to/bundle --scene /path/to/bundle/scene/scene.xml --desktop --steps 10000 --auto-run
 ```
 
-On macOS, use `DYLD_LIBRARY_PATH` instead of `LD_LIBRARY_PATH`.
-The loader directory must contain the versioned library as well as its unversioned linker name.
-The official MuJoCo 3.12.0 disk image can be used without copying its contents into this repository:
+Use `--headless` instead of `--desktop` for finite qualification.
+Both presentations use the same native coordinator, authenticated public protocol, actuator admission, observation capture, and receiver receipts.
+Unknown transitions or required process, capture, and delivery failures stop the run.
+Scenario execution uses a prepared run specification through `--simulation-run`; its results are reported after owned process cleanup.
+
+## Development and qualification
+
+Ordinary source builds need no MuJoCo:
 
 ```sh
-mkdir -p .local-mujoco/lib
-ln -s /Volumes/MuJoCo/mujoco.framework/Versions/A/libmujoco.3.12.0.dylib \
-  .local-mujoco/lib/libmujoco.dylib
-export MUJOCO_DYNAMIC_LINK_DIR="$PWD/.local-mujoco/lib"
-export DYLD_LIBRARY_PATH=/Volumes/MuJoCo/mujoco.framework/Versions/A
-cargo build --locked --release
+cargo build
+cargo test --test runtime_loading
 ```
 
-`.local-mujoco/` is local build state and must not be committed.
-Offscreen capture uses CGL on macOS and EGL on Linux; Linux needs an EGL/OpenGL implementation such as Mesa.
-A headless run creates no desktop window.
-
-Packaging is not implemented in this repository.
-`cargo phoxal simulation install` owns the self-contained macOS application and Linux native installation so source releases cannot drift from the user-facing installer.
-
-## Run
-
-From a robot project, the development command prepares the immutable bundle, launches its supervisor, and supplies the simulator's connection endpoint:
+CI checks library-free command behavior and ABI refusal on macOS and Linux, deterministic resource/configuration tests, formatting, strict Clippy, and documentation.
+Native host acceptance additionally needs the external qualified library and graphics environment:
 
 ```sh
-cargo phoxal simulation run simulation/scene.xml \
-  --headless --steps 50
+PHOXAL_MUJOCO_LIBRARY=/path/to/library cargo test --bin phoxal-simulator
+cargo phoxal test forward_turn_stop -- --nocapture
 ```
 
-Use `--simulator /absolute/path/phoxal-simulator` only to inject a source-built executable.
-
-Use `--desktop` for the viewport, Run/Pause, Step, Reset, and Stop controls.
-Drag the viewport to orbit and scroll to zoom.
-Desktop mode begins paused; reaching the finite bound pauses again so the result can be inspected.
-Reset starts a fresh timeline and establishes its initial observation cut before another step.
-The viewport uses a separate read-only observation workspace and does not drive sensor capture rates.
-
-A direct run needs a prepared simulation bundle and an already running supervisor:
-
-```sh
-phoxal-simulator \
-  --scene simulation/scene.xml --bundle /absolute/path/bundle \
-  --connect unixsock-stream//tmp/phoxal-run/router.sock \
-  --scope local --supervisor-id sim --run-id run \
-  --headless --steps 50
-```
-
-Replace `--steps` with `--duration` for an exact duration that is an integral number of authored physics quanta.
-The final JSON record contains the native and completed boundary evidence, actuator/provider bindings, and artifact provenance.
-A user stop before the finite bound is reported as stopped, without claiming that the requested transitions completed.
-
-Tooling can inspect native composition without connecting or integrating:
-
-```sh
-phoxal-simulator --probe --scene simulation/scene.xml \
-  --bundle /absolute/path/probe-bundle --json --headless
-```
-
-## Scene and capability authoring
-
-The scene supplies the physics quantum and a `robot_mount` site.
-The robot supplies its MJCF model, component mount sites, and selected components.
-Composition uses native attachment with deterministic namespaces.
-Actuator messages use authored `component.capability` identities; only the application resolves those identities to native actuator names.
-No component-specific native target selection belongs in the framework SDK.
-
-Camera capabilities must agree with their compiled native resolution and vertical field of view.
-RGB/mono frames use top-to-bottom rows; depth is geometric optical-axis distance encoded in millimeters, with zero for invalid or out-of-range pixels.
-Geometric depth does not reproduce a physical stereo reconstruction pipeline.
-Range uses a fixed finite-FOV ray set and the nearest valid hit.
-Publication rates remain phase-aligned with logical time and emit explicit NotDue membership between captures.
-
-A scene containing GNSS must declare its georeference:
-
-```xml
-<custom>
-  <numeric name="phoxal_georeference" data="0 0 0 0 0 0 0" />
-  <text name="phoxal_georeference_axes" data="ENU" />
-  <text name="phoxal_georeference_datum" data="WGS84_ELLIPSOIDAL" />
-</custom>
-```
-
-The seven numbers are latitude and longitude in degrees, ellipsoidal altitude in meters, local reference X/Y/Z in meters, and yaw in radians.
-The example is a synthetic equatorial origin, not a measured deployment location.
-Missing or invalid metadata refuses GNSS admission.
-GNSS is qualified within 100 km of the scene reference; a capture outside that extent fails the run.
-
-## Verification
-
-```sh
-cargo test --locked --workspace --all-targets
-cargo clippy --locked --workspace --all-targets -- -D warnings
-```
-
-The native tests require the same dynamic-library configuration as the executable.
-They cover fail-fast phase errors, authority fencing, deterministic cadence, native encoder/control behavior, georeference, and encoding.
-Full robot, desktop, memory-budget, process-failure, and released-artifact acceptance remain separate required proofs.
+CI and release qualification deliberately use `--locked` to check the committed application lockfile.
+Releases use ordinary crates.io publication through release-plz.
+Application package versions are independent of SDK versions; actual interface revisions and target determine compatibility.

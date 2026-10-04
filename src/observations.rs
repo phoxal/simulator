@@ -30,7 +30,7 @@ pub fn packet(
             sequence,
             capture_boundary: state.boundary(),
             capture_time_ns,
-            disposition: ProductDisposition::Present as i32,
+            disposition: ProductDisposition::Present,
             item_count: 1,
             encoded_bytes: payload.len() as u64,
             payload_digest: Sha256::digest(&payload).to_vec(),
@@ -103,7 +103,7 @@ pub fn not_due(
     let member = observation.membership.as_mut().ok_or_else(|| {
         NativeProviderError::InvalidPayload("observation membership absent".into())
     })?;
-    member.disposition = ProductDisposition::NotDue as i32;
+    member.disposition = ProductDisposition::NotDue;
     member.item_count = 0;
     Ok(observation)
 }

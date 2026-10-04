@@ -27,6 +27,7 @@ pub(super) struct DisplayState {
     pub(super) running: bool,
     pub(super) ready: bool,
     pub(super) finished: bool,
+    pub(super) close_requested: bool,
     pub(super) error: Option<String>,
     pub(super) frame: Option<RenderedCamera>,
     pub(super) camera: Option<ViewCamera>,
@@ -41,31 +42,33 @@ pub(super) struct Worker {
     pub(super) display: Arc<Mutex<DisplayState>>,
 }
 
-pub(super) fn run(options: Options) -> Result<(), String> {
+struct Control {
+    commands: SyncSender<Command>,
+    thread:
+        Option<std::thread::JoinHandle<Result<Option<crate::runtime::TerminalEvidence>, String>>>,
+}
+
+fn start_worker(options: Options, display: Arc<Mutex<DisplayState>>) -> Result<Control, String> {
     let (commands, receiver) = mpsc::sync_channel(8);
-    let display = Arc::new(Mutex::new(DisplayState::default()));
     let worker = Worker {
         commands: receiver,
         display: display.clone(),
     };
-    let worker_display = display.clone();
     let thread = std::thread::Builder::new()
         .name("simulation".into())
         .spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(1)
-                    .enable_all()
-                    .build()
-                    .map_err(|e| e.to_string())
-                    .and_then(|runtime| {
-                        runtime.block_on(crate::runtime::run(options, Some(worker)))
-                    })
+                crate::lifecycle::run_owned(options, Some(worker))
             }))
             .unwrap_or_else(|_| Err("simulation worker panicked".into()));
-            if let Ok(mut state) = worker_display.lock() {
+            // Finished means native authority and every owned process have been released.
+            if let Ok(mut state) = display.lock() {
                 state.running = false;
                 state.finished = true;
+                state.ready = false;
+                state.controls.clear();
+                state.actuation_boundary = None;
+                state.actuation_products = 0;
                 if let Err(error) = &outcome {
                     state.error = Some(error.clone());
                 }
@@ -73,7 +76,16 @@ pub(super) fn run(options: Options) -> Result<(), String> {
             outcome
         })
         .map_err(|e| e.to_string())?;
-    let shutdown = commands.clone();
+    Ok(Control {
+        commands,
+        thread: Some(thread),
+    })
+}
+
+pub(super) fn run(options: Options) -> Result<Option<crate::runtime::TerminalEvidence>, String> {
+    let display = Arc::new(Mutex::new(DisplayState::default()));
+    let control = Arc::new(Mutex::new(start_worker(options.clone(), display.clone())?));
+    let shutdown = control.clone();
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 820.0])
@@ -86,17 +98,25 @@ pub(super) fn run(options: Options) -> Result<(), String> {
         Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
             Ok(Box::new(Desktop {
-                commands,
+                control,
                 display,
+                options,
+                restart: 0,
                 texture: None,
                 message: None,
             }))
         }),
     )
     .map_err(|e| e.to_string());
-    // Dropping the last sender also stops the worker if the finite queue is full.
-    let _ = shutdown.try_send(Command::Stop);
-    drop(shutdown);
+    let mut owner = shutdown
+        .lock()
+        .map_err(|_| "desktop control lock poisoned")?;
+    let _ = owner.commands.try_send(Command::Stop);
+    // Closing the command channel also stops the run if the finite queue is full.
+    let (disconnected, _) = mpsc::sync_channel(1);
+    owner.commands = disconnected;
+    let thread = owner.thread.take().ok_or("desktop worker has no owner")?;
+    drop(owner);
     let simulation = thread
         .join()
         .map_err(|_| "simulation worker panicked".to_owned())?;
@@ -104,8 +124,10 @@ pub(super) fn run(options: Options) -> Result<(), String> {
 }
 
 struct Desktop {
-    commands: SyncSender<Command>,
+    control: Arc<Mutex<Control>>,
     display: Arc<Mutex<DisplayState>>,
+    options: Options,
+    restart: u64,
     texture: Option<egui::TextureHandle>,
     message: Option<String>,
 }
@@ -113,10 +135,16 @@ struct Desktop {
 impl Desktop {
     fn send(&mut self, command: Command) {
         self.message = self
-            .commands
-            .try_send(command)
-            .err()
-            .map(|e| format!("Control unavailable: {e}"));
+            .control
+            .lock()
+            .map_err(|_| "desktop control lock poisoned".to_owned())
+            .and_then(|owner| {
+                owner
+                    .commands
+                    .try_send(command)
+                    .map_err(|e| format!("Control unavailable: {e}"))
+            })
+            .err();
     }
 }
 
@@ -129,6 +157,9 @@ impl eframe::App for Desktop {
             ui.label("Simulation state is unavailable");
             return;
         };
+        if state.close_requested && state.finished {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         if let Some(frame) = state.frame.take() {
             let image = egui::ColorImage::from_rgb(frame.resolution(), frame.rgb());
             if let Some(texture) = &mut self.texture {
@@ -200,6 +231,29 @@ impl eframe::App for Desktop {
                             }
                         },
                     );
+                    if state.finished && ui.button("Restart").clicked() {
+                        let result = (|| -> Result<(), String> {
+                            let mut owner = self
+                                .control
+                                .lock()
+                                .map_err(|_| "desktop control lock poisoned")?;
+                            if let Some(thread) = owner.thread.take() {
+                                let _ = thread.join().map_err(|_| "simulation worker panicked")?;
+                            }
+                            self.restart += 1;
+                            let mut options = self.options.clone();
+                            options.run_id = Some(format!(
+                                "{}-restart-{}",
+                                options.run_id.as_deref().unwrap_or("desktop"),
+                                self.restart
+                            ));
+                            options.auto_run = true;
+                            *state = DisplayState::default();
+                            *owner = start_worker(options, self.display.clone())?;
+                            Ok(())
+                        })();
+                        self.message = result.err();
+                    }
                     ui.separator();
                     ui.monospace(format!(
                         "{:.3} s   |   Boundary {}   |   Generation {}",

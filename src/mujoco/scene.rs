@@ -3,10 +3,10 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use mujoco_rs::prelude::MjData;
+use crate::native_binding::prelude::MjData;
 #[cfg(all(feature = "rendering", target_os = "macos"))]
 mod cgl;
-#[cfg(all(feature = "rendering", not(target_os = "macos")))]
+#[cfg(all(feature = "rendering", target_os = "linux"))]
 mod egl;
 #[cfg(feature = "rendering")]
 mod renderer;
@@ -159,7 +159,7 @@ pub struct SceneStep {
 /// renderer without an explicit owner boundary.
 pub struct Workspace {
     model: Model,
-    data: MjData<std::sync::Arc<mujoco_rs::wrappers::MjModel>>,
+    data: MjData<std::sync::Arc<crate::native_binding::wrappers::MjModel>>,
     #[cfg(feature = "rendering")]
     renderer: Option<RendererState>,
     _thread_affine: PhantomData<Rc<()>>,

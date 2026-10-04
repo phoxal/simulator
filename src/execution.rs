@@ -45,6 +45,13 @@ pub(super) async fn drive(
             _ = std::future::ready(()) => false,
         };
         if stop_signal {
+            if let Some(worker) = &desktop {
+                worker
+                    .display
+                    .lock()
+                    .map_err(|_| "desktop state lock poisoned")?
+                    .close_requested = true;
+            }
             break;
         }
         let mut single_step = false;

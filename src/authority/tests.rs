@@ -34,7 +34,7 @@ impl Peer {
             products,
             prepared_boundary: key.boundary,
             admitted_observation_boundary: next_boundary,
-            status: phase as i32,
+            status: phase,
         };
         state.applied.push(phase);
         state.boundary = next_boundary;
@@ -121,7 +121,7 @@ impl SimulationTransport for Peer {
                 sequence: key.boundary + 1,
                 capture_boundary: key.boundary,
                 capture_time_ns: key.boundary * 2_000_000,
-                disposition: ProductDisposition::Present as i32,
+                disposition: ProductDisposition::Present,
                 item_count: 1,
                 encoded_bytes: payload.len() as u64,
                 payload_digest: Sha256::digest(&payload).to_vec(),
@@ -242,7 +242,7 @@ fn observation(boundary: u64) -> Vec<Observation> {
             sequence: boundary + 1,
             capture_boundary: boundary,
             capture_time_ns: boundary * 2_000_000,
-            disposition: ProductDisposition::Present as i32,
+            disposition: ProductDisposition::Present,
             item_count: 1,
             encoded_bytes: payload.len() as u64,
             payload_digest: Sha256::digest(&payload).to_vec(),

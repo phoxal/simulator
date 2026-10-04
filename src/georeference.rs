@@ -61,3 +61,37 @@ pub(super) fn georeference(model: &Model, instance: &str) -> Result<Georeference
     )
     .map_err(|error| error.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mujoco::Model;
+    #[test]
+    fn zed_georeference_reads_scene_owned_mjcf_metadata() {
+        let model = Model::from_xml(
+            r#"<mujoco model="scene">
+                <custom>
+                    <numeric name="phoxal_georeference" data="52 5 10 1 2 3 0.25"/>
+                    <text name="phoxal_georeference_axes" data="ENU"/>
+                    <text name="phoxal_georeference_datum" data="WGS84_ELLIPSOIDAL"/>
+                </custom>
+                <worldbody/>
+            </mujoco>"#,
+        )
+        .expect("scene model");
+        let georeference = georeference(&model, "gnss").expect("scene georeference");
+        assert_eq!(georeference.latitude_deg, 52.0);
+        assert_eq!(georeference.longitude_deg, 5.0);
+        assert_eq!(georeference.altitude_m, 10.0);
+        assert_eq!(georeference.origin_m, [1.0, 2.0, 3.0]);
+        assert_eq!(georeference.yaw_rad, 0.25);
+    }
+
+    #[test]
+    fn zed_georeference_rejects_missing_scene_metadata() {
+        let model =
+            Model::from_xml(r#"<mujoco model="scene"><worldbody/></mujoco>"#).expect("scene model");
+        let error = georeference(&model, "gnss").expect_err("metadata is required");
+        assert!(error.contains("phoxal_georeference"));
+    }
+}

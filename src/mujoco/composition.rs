@@ -10,11 +10,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, CString};
 use std::fmt;
 
-use mujoco_rs::mujoco_c::{
+use crate::native_binding::mujoco_c::{
     mj_compile, mj_deleteModel, mjs_attach, mjs_getError, mjs_setDeepCopy, mjsElement,
 };
-use mujoco_rs::prelude::MjSpec;
-use mujoco_rs::wrappers::{MjVfs, SpecItem};
+use crate::native_binding::prelude::MjSpec;
+use crate::native_binding::wrappers::{MjVfs, SpecItem};
 use sha2::{Digest, Sha256};
 
 use crate::mujoco::artifact::{ClosedModel, Resource};
@@ -777,7 +777,7 @@ fn serialize_spec(spec: &MjSpec) -> Result<Vec<u8>, ModelError> {
     loop {
         match spec.save_xml_string(buffer_size) {
             Ok(xml) => return Ok(xml.into_bytes()),
-            Err(mujoco_rs::error::MjEditError::XmlBufferTooSmall { required_size }) => {
+            Err(crate::native_binding::error::MjEditError::XmlBufferTooSmall { required_size }) => {
                 buffer_size = required_size.checked_add(1).ok_or_else(|| {
                     composition_model_error("composed XML size overflows native buffer")
                 })?;

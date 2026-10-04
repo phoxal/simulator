@@ -194,6 +194,34 @@ impl ClosedModel {
         )
     }
 
+    /// Reads only resources referenced by the scene, with the parent directory
+    /// as the confinement boundary. Unrelated source and build files are absent.
+    pub fn from_referenced_file(path: impl AsRef<Path>) -> Result<Self, ArtifactError> {
+        let path = path.as_ref();
+        let root = path
+            .parent()
+            .ok_or_else(|| ArtifactError::InvalidResourceName(path.display().to_string()))?;
+        let entry = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| ArtifactError::InvalidResourceName(path.display().to_string()))?;
+        let mut reader = ReferencedResources {
+            root,
+            files: BTreeMap::new(),
+            models: BTreeSet::new(),
+            limits: ResourceLimits::default(),
+            total: 0,
+        };
+        reader.model(entry, &mut BTreeSet::new())?;
+        Self::new(
+            entry,
+            reader
+                .files
+                .into_iter()
+                .map(|(name, bytes)| Resource { name, bytes }),
+        )
+    }
+
     /// Reads one model directory into a closed resource closure.
     ///
     /// `root` is an explicit resource boundary.
@@ -315,6 +343,142 @@ struct AssetDirectories {
 struct XmlTag {
     name: String,
     attributes: BTreeMap<String, String>,
+}
+
+struct ReferencedResources<'a> {
+    root: &'a Path,
+    files: BTreeMap<String, Vec<u8>>,
+    models: BTreeSet<String>,
+    limits: ResourceLimits,
+    total: usize,
+}
+
+impl ReferencedResources<'_> {
+    fn read(&mut self, name: &str) -> Result<(), ArtifactError> {
+        use std::io::Read as _;
+        if self.files.contains_key(name) {
+            return Ok(());
+        }
+        validate_resource_name(name)?;
+        if self.files.len() >= self.limits.max_resources {
+            return Err(ArtifactError::TooManyResources {
+                actual: self.files.len() + 1,
+                limit: self.limits.max_resources,
+            });
+        }
+        let mut path = self.root.to_owned();
+        for component in std::iter::once(Path::new("")).chain(Path::new(name).iter().map(Path::new))
+        {
+            path.push(component);
+            let metadata = fs::symlink_metadata(&path).map_err(|source| ArtifactError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(ArtifactError::UnsupportedFileType(path));
+            }
+        }
+        let metadata = fs::metadata(&path).map_err(|source| ArtifactError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        if !metadata.is_file() {
+            return Err(ArtifactError::UnsupportedFileType(path));
+        }
+        let mut bytes = Vec::new();
+        fs::File::open(&path)
+            .and_then(|file| {
+                file.take(self.limits.max_resource_bytes as u64 + 1)
+                    .read_to_end(&mut bytes)
+            })
+            .map_err(|source| ArtifactError::Io { path, source })?;
+        if bytes.len() > self.limits.max_resource_bytes {
+            return Err(ArtifactError::ResourceTooLarge {
+                name: name.to_owned(),
+                actual: bytes.len(),
+                limit: self.limits.max_resource_bytes,
+            });
+        }
+        self.total = self
+            .total
+            .checked_add(bytes.len())
+            .ok_or(ArtifactError::ClosureTooLarge {
+                actual: usize::MAX,
+                limit: self.limits.max_closure_bytes,
+            })?;
+        if self.total > self.limits.max_closure_bytes {
+            return Err(ArtifactError::ClosureTooLarge {
+                actual: self.total,
+                limit: self.limits.max_closure_bytes,
+            });
+        }
+        self.files.insert(name.to_owned(), bytes);
+        Ok(())
+    }
+
+    fn expand(
+        &mut self,
+        source: &str,
+        directory: &str,
+        visited: &mut BTreeSet<String>,
+        tags: &mut Vec<(String, XmlTag)>,
+    ) -> Result<(), ArtifactError> {
+        if visited.len() >= 128 || !visited.insert(source.to_owned()) {
+            return Err(invalid_xml_reference(
+                source,
+                "duplicate, cyclic or excessively nested XML include",
+            ));
+        }
+        self.read(source)?;
+        let document = std::str::from_utf8(&self.files[source])
+            .map_err(|error| invalid_xml_reference(source, error.to_string()))?;
+        let parsed = parse_xml_tags(source, document)?;
+        for tag in parsed {
+            if tag.name == "include" {
+                let reference = tag
+                    .attributes
+                    .get("file")
+                    .ok_or_else(|| invalid_xml_reference(source, "include has no file"))?;
+                let resolved = resolve_resource_reference(source, directory, "", reference)?;
+                self.expand(&resolved, directory, visited, tags)?;
+            } else {
+                tags.push((source.to_owned(), tag));
+            }
+        }
+        Ok(())
+    }
+
+    fn model(&mut self, entry: &str, active: &mut BTreeSet<String>) -> Result<(), ArtifactError> {
+        if active.len() >= 128 || !active.insert(entry.to_owned()) {
+            return Err(invalid_xml_reference(
+                entry,
+                "cyclic or excessively nested model attachment",
+            ));
+        }
+        if self.models.contains(entry) {
+            active.remove(entry);
+            return Ok(());
+        }
+        let directory = resource_parent(entry);
+        let mut tags = Vec::new();
+        self.expand(entry, &directory, &mut BTreeSet::new(), &mut tags)?;
+        let directories = asset_directories(entry, tags.iter().map(|(_, tag)| tag))?;
+        for (source, tag) in &tags {
+            for (attribute, asset_directory) in file_attributes(tag, &directories) {
+                let reference = &tag.attributes[attribute];
+                validate_file_format(source, &tag.name, attribute, reference, tag)?;
+                let resolved =
+                    resolve_resource_reference(source, &directory, asset_directory, reference)?;
+                self.read(&resolved)?;
+                if tag.name == "model" {
+                    self.model(&resolved, active)?;
+                }
+            }
+        }
+        active.remove(entry);
+        self.models.insert(entry.to_owned());
+        Ok(())
+    }
 }
 
 fn validate_xml_references(entry: &str, resources: &[Resource]) -> Result<(), ArtifactError> {
@@ -1214,7 +1378,6 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
     #[test]
     fn directory_closure_refuses_symlinks() {
         let root = tempfile::tempdir().unwrap();
@@ -1227,7 +1390,6 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
     #[test]
     fn directory_closure_refuses_a_symlinked_root() {
         let parent = tempfile::tempdir().unwrap();
@@ -1296,5 +1458,73 @@ mod closed_scope_tests {
     #[test]
     fn unimplemented_file_reading_elements_fail_before_native_parsing() {
         assert!(ClosedModel::from_xml(r#"<mujoco><worldbody><flexcomp name="cloth" type="gmsh" file="/tmp/outside.msh"/></worldbody></mujoco>"#).is_err());
+    }
+}
+
+#[cfg(test)]
+mod referenced_resources_tests {
+    use super::*;
+
+    #[test]
+    fn referenced_scene_excludes_build_outputs_and_tracks_includes_and_assets() {
+        let directory = tempfile::tempdir().expect("scene directory");
+        let root = directory.path();
+        fs::create_dir_all(root.join("assets/meshes")).expect("asset directory");
+        fs::create_dir_all(root.join("target/bundle")).expect("unrelated build directory");
+        fs::write(root.join("scene.xml"), r#"<mujoco><include file="part.xml"/><asset><mesh name="shape" file="shape.obj"/></asset><worldbody/></mujoco>"#).expect("scene");
+        fs::write(
+            root.join("part.xml"),
+            r#"<mujocoinclude><compiler meshdir="assets/meshes"/></mujocoinclude>"#,
+        )
+        .expect("include");
+        fs::write(root.join("assets/meshes/shape.obj"), b"v 0 0 0\n").expect("mesh");
+        fs::write(
+            root.join("target/bundle/supervisor"),
+            b"unrelated executable",
+        )
+        .expect("build output");
+        let first =
+            ClosedModel::from_referenced_file(root.join("scene.xml")).expect("referenced closure");
+        assert_eq!(
+            first.resources().map(Resource::name).collect::<Vec<_>>(),
+            vec!["assets/meshes/shape.obj", "part.xml", "scene.xml"]
+        );
+        fs::write(
+            root.join("target/bundle/supervisor"),
+            b"different implementation",
+        )
+        .expect("implementation edit");
+        let unchanged =
+            ClosedModel::from_referenced_file(root.join("scene.xml")).expect("unchanged closure");
+        assert_eq!(
+            first, unchanged,
+            "implementation bytes cannot enter scene identity"
+        );
+        fs::write(root.join("assets/meshes/shape.obj"), b"v 1 0 0\n").expect("asset change");
+        assert_ne!(
+            first,
+            ClosedModel::from_referenced_file(root.join("scene.xml")).expect("changed closure")
+        );
+    }
+
+    #[test]
+    fn referenced_scene_refuses_escape_and_symlinked_resource_ancestors() {
+        let directory = tempfile::tempdir().expect("scene directory");
+        let root = directory.path();
+        fs::write(
+            root.join("scene.xml"),
+            r#"<mujoco><include file="../outside.xml"/></mujoco>"#,
+        )
+        .expect("scene");
+        assert!(ClosedModel::from_referenced_file(root.join("scene.xml")).is_err());
+        let outside = tempfile::tempdir().expect("outside directory");
+        fs::write(outside.path().join("part.xml"), "<mujocoinclude/>").expect("outside resource");
+        std::os::unix::fs::symlink(outside.path(), root.join("linked")).expect("resource symlink");
+        fs::write(
+            root.join("scene.xml"),
+            r#"<mujoco><include file="linked/part.xml"/></mujoco>"#,
+        )
+        .expect("symlink scene");
+        assert!(ClosedModel::from_referenced_file(root.join("scene.xml")).is_err());
     }
 }

@@ -2,7 +2,7 @@
 
 use super::{Workspace, renderer::CameraRenderer};
 use crate::mujoco::{CameraHandle, WorkspaceError};
-use mujoco_rs::wrappers::mj_visualization::MjvCamera;
+use crate::native_binding::wrappers::mj_visualization::MjvCamera;
 
 // RGB + depth storage is at most 28 MiB per renderer, before the copied result.
 const MAX_PIXELS: usize = 4 * 1024 * 1024;

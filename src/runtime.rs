@@ -20,7 +20,7 @@ pub(super) const CONTROL_PRINCIPAL: &str = "simulator";
 pub(super) async fn run(
     options: Options,
     desktop: Option<crate::desktop::Worker>,
-) -> Result<(), String> {
+) -> Result<Option<crate::runtime::TerminalEvidence>, String> {
     let bundle = BundleFacts::load(&options.bundle)?;
     let model = load_composed_model(&options.scene, &bundle)?;
     let quantum_ns = quantum_nanoseconds(
@@ -46,7 +46,7 @@ pub(super) async fn run(
             "{}",
             serde_json::to_string(&facts).map_err(|error| error.to_string())?
         );
-        return Ok(());
+        return Ok(None);
     }
 
     let simulation = bundle
@@ -128,13 +128,7 @@ pub(super) async fn run(
     drop(supervisor);
     let close_result = connection.close().await;
     match (outcome, close_result) {
-        (Ok(evidence), Ok(())) => {
-            println!(
-                "{}",
-                serde_json::to_string(&evidence).map_err(|error| error.to_string())?
-            );
-            Ok(())
-        }
+        (Ok(evidence), Ok(())) => Ok(Some(evidence)),
         (Ok(_), Err(error)) => Err(format!("public session cleanup failed: {error}")),
         (Err(error), Ok(())) => Err(error),
         (Err(error), Err(close_error)) => Err(format!(

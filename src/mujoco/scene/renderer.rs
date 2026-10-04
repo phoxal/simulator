@@ -2,10 +2,10 @@
 
 #[cfg(target_os = "macos")]
 use super::cgl::Context;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use super::egl::Context;
-use mujoco_rs::wrappers::mj_model::traits::ModelType;
-use mujoco_rs::{
+use crate::native_binding::wrappers::mj_model::traits::ModelType;
+use crate::native_binding::{
     prelude::MjData,
     wrappers::{
         MjModel,

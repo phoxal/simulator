@@ -17,8 +17,9 @@ pub(super) enum Bound {
     Duration(f64),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Options {
+    pub(super) simulation_run: Option<PathBuf>,
     pub(super) probe: bool,
     pub(super) scene: PathBuf,
     pub(super) bundle: PathBuf,
@@ -37,9 +38,13 @@ pub(super) struct Options {
     name = "phoxal-simulator",
     version = env!("CARGO_PKG_VERSION"),
     about = "Run the native Phoxal MuJoCo simulator",
+    after_help = "Commands: project prepares and opens a robot project; run executes a prepared bundle; stage-scene copies a scene resource closure. Use <command> --help for options.",
     group(ArgGroup::new("presentation").required(true).args(["headless", "desktop"]))
 )]
 struct Cli {
+    /// Prepared scenario run specification consumed by the supervisor.
+    #[arg(long)]
+    simulation_run: Option<PathBuf>,
     /// Inspect the composed model without connecting to a supervisor.
     #[arg(long)]
     probe: bool,
@@ -115,7 +120,11 @@ impl Presentation {
 
 impl Options {
     pub(super) fn from_env() -> Result<Self, String> {
-        Self::from_cli(Cli::parse())
+        let mut arguments: Vec<_> = std::env::args_os().collect();
+        if arguments.get(1).is_some_and(|arg| arg == "run") {
+            arguments.remove(1);
+        }
+        Self::from_cli(Cli::parse_from(arguments))
     }
 
     #[cfg(test)]
@@ -151,15 +160,6 @@ impl Options {
                 );
             }
         } else {
-            if cli.connect.is_none()
-                || cli.scope.is_none()
-                || cli.supervisor_id.is_none()
-                || cli.run_id.is_none()
-            {
-                return Err(
-                    "a run requires --connect, --scope, --supervisor-id, and --run-id".to_owned(),
-                );
-            }
             if bound.is_none() {
                 return Err("a run requires exactly one of --steps or --duration".to_owned());
             }
@@ -174,15 +174,17 @@ impl Options {
             }
         }
         Ok(Self {
+            simulation_run: cli.simulation_run,
             probe: cli.probe,
             scene: cli.scene,
             bundle: cli.bundle,
             json: cli.json,
             presentation,
-            scope: cli.scope,
+            scope: (!cli.probe).then(|| cli.scope.unwrap_or_else(|| "local".into())),
             connect: cli.connect,
-            supervisor_id: cli.supervisor_id,
-            run_id: cli.run_id,
+            supervisor_id: (!cli.probe)
+                .then(|| cli.supervisor_id.unwrap_or_else(|| "local".into())),
+            run_id: (!cli.probe).then(|| cli.run_id.unwrap_or_else(|| "local-simulation".into())),
             bound,
             auto_run: cli.auto_run,
         })
@@ -212,4 +214,174 @@ fn validate_identity(value: &str, field: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::{Bound, Options, Presentation};
+    use std::ffi::OsString;
+
+    fn parse(arguments: &[&str]) -> Result<Options, String> {
+        Options::parse(arguments.iter().copied().map(OsString::from))
+    }
+
+    #[test]
+    fn probe_requires_closed_scene_facts_and_json() {
+        let options = parse(&[
+            "--probe",
+            "--scene",
+            "scene.xml",
+            "--bundle",
+            "bundle",
+            "--json",
+            "--headless",
+        ])
+        .expect("probe options");
+        assert!(options.probe);
+        assert!(options.json);
+        assert_eq!(options.presentation, Presentation::Headless);
+        assert!(options.bound.is_none());
+    }
+
+    #[test]
+    fn run_requires_exact_public_identity_and_finite_bound() {
+        let options = parse(&[
+            "--scene",
+            "scene.xml",
+            "--bundle",
+            "bundle",
+            "--headless",
+            "--connect",
+            "unixsock-stream//tmp/test.sock",
+            "--scope",
+            "local",
+            "--supervisor-id",
+            "sim",
+            "--run-id",
+            "run",
+            "--steps",
+            "12",
+        ])
+        .expect("run options");
+        assert!(!options.probe);
+        assert_eq!(options.bound, Some(Bound::Steps(12)));
+        assert_eq!(options.scope.as_deref(), Some("local"));
+    }
+
+    #[test]
+    fn options_reject_mixed_probe_and_run_modes() {
+        assert!(
+            parse(&[
+                "--probe",
+                "--scene",
+                "scene.xml",
+                "--bundle",
+                "bundle",
+                "--json",
+                "--steps",
+                "1",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "--scene",
+                "scene.xml",
+                "--bundle",
+                "bundle",
+                "--headless",
+                "--connect",
+                "unixsock-stream//tmp/test.sock",
+                "--scope",
+                "local",
+                "--supervisor-id",
+                "sim",
+                "--run-id",
+                "run",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "--scene",
+                "scene.xml",
+                "--bundle",
+                "bundle",
+                "--headless",
+                "--desktop",
+                "--connect",
+                "unixsock-stream//tmp/test.sock",
+                "--scope",
+                "local",
+                "--supervisor-id",
+                "sim",
+                "--run-id",
+                "run",
+                "--steps",
+                "1",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn options_require_a_presentation_and_keep_json_probe_only() {
+        assert!(
+            parse(&[
+                "--probe",
+                "--scene",
+                "scene.xml",
+                "--bundle",
+                "bundle",
+                "--json"
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "--scene",
+                "scene.xml",
+                "--bundle",
+                "bundle",
+                "--connect",
+                "unixsock-stream//tmp/test.sock",
+                "--scope",
+                "local",
+                "--supervisor-id",
+                "sim",
+                "--run-id",
+                "run",
+                "--steps",
+                "1",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "--scene",
+                "scene.xml",
+                "--bundle",
+                "bundle",
+                "--headless",
+                "--json",
+                "--connect",
+                "unixsock-stream//tmp/test.sock",
+                "--scope",
+                "local",
+                "--supervisor-id",
+                "sim",
+                "--run-id",
+                "run",
+                "--steps",
+                "1",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn duration_must_be_an_exact_quantum_multiple() {
+        assert_eq!(Bound::Duration(0.02).steps(10_000_000).unwrap(), 2);
+        assert!(Bound::Duration(0.015).steps(10_000_000).is_err());
+    }
 }
