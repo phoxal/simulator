@@ -750,9 +750,9 @@ fn resolve_mesh_content_types(spec: &mut MjSpec) {
             .extension()
             .and_then(|s| s.to_str())
         {
-            Some("obj") => "model/obj",
-            Some("stl") => "model/stl",
-            Some("msh") => "model/vnd.mujoco.msh",
+            Some(extension) if extension.eq_ignore_ascii_case("obj") => "model/obj",
+            Some(extension) if extension.eq_ignore_ascii_case("stl") => "model/stl",
+            Some(extension) if extension.eq_ignore_ascii_case("msh") => "model/vnd.mujoco.msh",
             _ => continue,
         };
         mesh.set_content_type(content_type);
@@ -1064,23 +1064,70 @@ mod tests {
     }
 
     #[test]
-    fn composed_mesh_identity_is_stable_across_cold_and_warm_native_asset_cache() {
-        let scene = ClosedModel::from_xml(
-            r#"<mujoco><worldbody><site name="robot_mount"/></worldbody></mujoco>"#,
-        )
-        .unwrap();
-        let robot = ClosedModel::new("robot.xml", [
-            Resource::new("robot.xml", br#"<mujoco><asset><mesh name="shell" file="cache-regression.obj"/></asset><worldbody><body name="root"><geom type="mesh" mesh="shell"/></body></worldbody></mujoco>"#).unwrap(),
-            Resource::new("cache-regression.obj", b"v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n").unwrap(),
-        ]).unwrap();
-        let composition =
-            SceneComposition::new(scene, robot, "cachetest", "robot_mount", "root", []).unwrap();
-        let first = composition.compile().unwrap();
-        let rebuilt = std::thread::spawn(move || composition.compile().unwrap())
-            .join()
+    fn mixed_case_extensions_resolve_native_content_type_defaults() {
+        // Parsing verifies the case-insensitive default independently of decoder availability.
+        // The qualified distro's decoder accepts .obj/.OBJ but refuses .oBj.
+        for (extension, expected) in [
+            ("oBj", "model/obj"),
+            ("sTl", "model/stl"),
+            ("mSh", "model/vnd.mujoco.msh"),
+        ] {
+            let filename = format!("mesh.{extension}");
+            let xml = format!(
+                r#"<mujoco><asset><mesh name="shell" file="{filename}"/></asset></mujoco>"#
+            );
+            let artifact = ClosedModel::new(
+                "model.xml",
+                [
+                    Resource::new("model.xml", xml.into_bytes()).unwrap(),
+                    Resource::new(filename, b"retained resource").unwrap(),
+                ],
+            )
             .unwrap();
-        assert_eq!(first.identity(), rebuilt.identity());
-        assert_eq!(first.artifact(), rebuilt.artifact());
+            let parsed = parse_spec_with_prefix(&artifact, "").unwrap();
+            assert_eq!(
+                parsed.spec.mesh_iter().next().unwrap().content_type(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn composed_mesh_identity_is_stable_across_cold_and_warm_native_asset_cache() {
+        for filename in [
+            "cache-regression.obj",
+            "CACHE-REGRESSION.OBJ",
+            "CaChE-ReGrEsSiOn.OBJ",
+        ] {
+            let scene = ClosedModel::from_xml(
+                r#"<mujoco><worldbody><site name="robot_mount"/></worldbody></mujoco>"#,
+            )
+            .unwrap();
+            let xml = format!(
+                r#"<mujoco><asset><mesh name="shell" file="{filename}"/></asset><worldbody><body name="root"><geom type="mesh" mesh="shell"/></body></worldbody></mujoco>"#
+            );
+            let robot = ClosedModel::new(
+                "robot.xml",
+                [
+                    Resource::new("robot.xml", xml.into_bytes()).unwrap(),
+                    Resource::new(
+                        filename,
+                        b"v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n",
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap();
+            let composition =
+                SceneComposition::new(scene, robot, "cachetest", "robot_mount", "root", [])
+                    .unwrap();
+            let first = composition.compile().unwrap();
+            let rebuilt = std::thread::spawn(move || composition.compile().unwrap())
+                .join()
+                .unwrap();
+            assert_eq!(first.identity(), rebuilt.identity(), "{filename}");
+            assert_eq!(first.artifact(), rebuilt.artifact(), "{filename}");
+        }
     }
 
     #[test]
