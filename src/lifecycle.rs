@@ -347,7 +347,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let ready = directory.path().join("ready.json");
         let script = format!(
-            "trap '{on_term}' TERM; printf '%s' '{{\"schema\":\"phoxal/supervisor-ready/v0\",\"execution\":\"execution-1\"}}' > \"$1\"; while :; do :; done"
+            "trap '{on_term}' TERM; printf '%s' '{{\"schema\":\"phoxal/supervisor-ready/v0\",\"execution\":\"execution-1\"}}' > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; while :; do :; done"
         );
         let child = Command::new("/bin/sh")
             .args(["-c", &script, "fixture"])
