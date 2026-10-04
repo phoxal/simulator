@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/phoxal/simulator/compare/phoxal-simulator-v0.1.0...phoxal-simulator-v0.1.1) - 2026-10-04
+
+### Fixed
+
+- *(simulator)* discover standard macOS MuJoCo applications
+
+### Other
+
+- *(release)* update package versions ([#5](https://github.com/phoxal/simulator/pull/5))
+
 ## [0.1.0](https://github.com/phoxal/simulator/releases/tag/phoxal-simulator-v0.1.0) - 2026-10-04
 
 ### Added
