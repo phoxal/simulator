@@ -35,6 +35,9 @@ fn load() -> Result<mujoco_c::Api, String> {
             "/opt/homebrew/lib/libmujoco.dylib",
             "/usr/local/lib/libmujoco.dylib",
             "/Library/Frameworks/mujoco.framework/Versions/A/libmujoco.dylib",
+            "/Library/Frameworks/mujoco.framework/Versions/A/libmujoco.3.12.0.dylib",
+            "/Applications/MuJoCo.app/Contents/Frameworks/mujoco.framework/Versions/A/libmujoco.3.12.0.dylib",
+            "/Applications/MuJoCoStudio.app/Contents/Frameworks/mujoco.framework/Versions/A/libmujoco.3.12.0.dylib",
         ]
         .into_iter()
         .map(Into::into)

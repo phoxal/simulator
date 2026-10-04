@@ -27,7 +27,8 @@ export PHOXAL_MUJOCO_LIBRARY=/path/to/libmujoco.3.12.0.dylib
 ```
 
 Linux libraries normally use `libmujoco.so.3.12.0`.
-Discovery also tries the platform library search path, `/usr/local/lib`, the macOS Homebrew `/opt/homebrew/lib` directory, and the system MuJoCo framework.
+Discovery also tries the platform library search path, `/usr/local/lib`, the macOS Homebrew `/opt/homebrew/lib` directory, the system MuJoCo framework, and the framework inside `/Applications/MuJoCo.app` or `/Applications/MuJoCoStudio.app`.
+For an app installed elsewhere or a mounted DMG, set `PHOXAL_MUJOCO_LIBRARY` to its actual library file.
 An explicit path takes precedence and is never silently replaced with another library.
 The internal binding adaptation retains the upstream licenses and generates typed runtime symbol dispatch from the original ABI declaration.
 The library stays loaded for all engine objects and their destruction.
