@@ -706,6 +706,7 @@ fn parse_spec_with_prefix(artifact: &ClosedModel, prefix: &str) -> Result<Parsed
     let entry = format!("{prefix}{}", artifact.entry());
     let mut spec = MjSpec::from_xml_vfs(&entry, &vfs)
         .map_err(|error| composition_model_error(format!("native parse: {error}")))?;
+    resolve_mesh_content_types(&mut spec);
     if !prefix.is_empty() {
         namespace_asset_files(&mut spec, prefix)?;
     }
@@ -731,9 +732,31 @@ fn parse_spec_with_prefixed_resources(
                 })?;
         }
     }
-    let spec = MjSpec::from_xml_vfs(artifact.entry(), &vfs)
+    let mut spec = MjSpec::from_xml_vfs(artifact.entry(), &vfs)
         .map_err(|error| composition_model_error(format!("native parse: {error}")))?;
+    resolve_mesh_content_types(&mut spec);
     Ok(ParsedSpec { spec, _vfs: vfs })
+}
+
+// MuJoCo 3.12 skips inferred mesh content-type population on asset-cache hits.
+// Resolve its built-in extension defaults before compilation so cold and warm
+// serialization produce the same closed artifact. Authored overrides remain authoritative.
+fn resolve_mesh_content_types(spec: &mut MjSpec) {
+    for mesh in spec.mesh_iter_mut() {
+        if !mesh.content_type().is_empty() {
+            continue;
+        }
+        let content_type = match std::path::Path::new(mesh.file())
+            .extension()
+            .and_then(|s| s.to_str())
+        {
+            Some("obj") => "model/obj",
+            Some("stl") => "model/stl",
+            Some("msh") => "model/vnd.mujoco.msh",
+            _ => continue,
+        };
+        mesh.set_content_type(content_type);
+    }
 }
 
 fn namespace_asset_files(spec: &mut MjSpec, prefix: &str) -> Result<(), ModelError> {
@@ -1019,6 +1042,46 @@ impl fmt::Display for ModelComposition {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_mesh_content_type_is_not_replaced_by_its_file_extension() {
+        let artifact = ClosedModel::new("model.xml", [
+            Resource::new("model.xml", br#"<mujoco><asset><mesh name="shell" content_type="model/stl" file="mesh.obj"/></asset><worldbody><geom type="mesh" mesh="shell"/></worldbody></mujoco>"#).unwrap(),
+            Resource::new("mesh.obj", b"v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n").unwrap(),
+        ]).unwrap();
+        let parsed = parse_spec_with_prefix(&artifact, "").unwrap();
+        assert_eq!(
+            parsed.spec.mesh_iter().next().unwrap().content_type(),
+            "model/stl"
+        );
+        let model = ModelComposition::new(artifact, [])
+            .unwrap()
+            .compile()
+            .unwrap();
+        let xml =
+            std::str::from_utf8(model.artifact().resource("model.xml").unwrap().bytes()).unwrap();
+        assert!(xml.contains("content_type=\"model/stl\""));
+    }
+
+    #[test]
+    fn composed_mesh_identity_is_stable_across_cold_and_warm_native_asset_cache() {
+        let scene = ClosedModel::from_xml(
+            r#"<mujoco><worldbody><site name="robot_mount"/></worldbody></mujoco>"#,
+        )
+        .unwrap();
+        let robot = ClosedModel::new("robot.xml", [
+            Resource::new("robot.xml", br#"<mujoco><asset><mesh name="shell" file="cache-regression.obj"/></asset><worldbody><body name="root"><geom type="mesh" mesh="shell"/></body></worldbody></mujoco>"#).unwrap(),
+            Resource::new("cache-regression.obj", b"v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n").unwrap(),
+        ]).unwrap();
+        let composition =
+            SceneComposition::new(scene, robot, "cachetest", "robot_mount", "root", []).unwrap();
+        let first = composition.compile().unwrap();
+        let rebuilt = std::thread::spawn(move || composition.compile().unwrap())
+            .join()
+            .unwrap();
+        assert_eq!(first.identity(), rebuilt.identity());
+        assert_eq!(first.artifact(), rebuilt.artifact());
+    }
 
     #[test]
     fn canonical_namespace_is_explicit_and_deterministic() {

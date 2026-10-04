@@ -269,10 +269,17 @@ impl eframe::App for Desktop {
                         state.pending_camera = Some(view);
                     }
                 } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.spinner();
-                        ui.label("Preparing native scene…");
-                    });
+                    let available =
+                        (ui.available_size() - egui::vec2(0.0, 40.0)).max(egui::vec2(1.0, 1.0));
+                    ui.allocate_ui_with_layout(
+                        available,
+                        egui::Layout::top_down(egui::Align::Center),
+                        |ui| {
+                            ui.add_space(((available.y - 52.0) / 2.0).max(0.0));
+                            ui.spinner();
+                            ui.label("Preparing native scene…");
+                        },
+                    );
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
