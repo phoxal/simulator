@@ -67,6 +67,7 @@ Use `--headless` instead of `--desktop` for finite qualification.
 Both presentations use the same native coordinator, authenticated public protocol, actuator admission, observation capture, and receiver receipts.
 Unknown transitions or required process, capture, and delivery failures stop the run.
 Scenario execution uses a prepared run specification through `--simulation-run`; its results are reported after owned process cleanup.
+A nonzero supervisor exit or forced shutdown fails the simulation, and the terminal report records the same exit outcome as the command.
 
 ## Development and qualification
 
