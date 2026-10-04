@@ -1,0 +1,51 @@
+name: Public installation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PHOXAL_MUJOCO_LIBRARY: /missing/mujoco
+    steps:
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Isolate Cargo files from checkout and runner caches
+        run: printf 'CARGO_HOME=%s/public-cargo\nCARGO_TARGET_DIR=%s/public-build\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1-mesa-dev libgl1-mesa-dev libxkbcommon-dev libwayland-dev
+      - name: Install ordinary public releases without MuJoCo
+        run: |
+          cargo install cargo-phoxal
+          cargo install phoxal-simulator
+      - name: Validate installed executables after removing build products
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -r "$CARGO_TARGET_DIR"
+          export PATH="$CARGO_HOME/bin:$PATH"
+          phoxal-simulator --help > simulator-help
+          cargo phoxal simulation --help > proxy-help
+          cmp simulator-help proxy-help
+          phoxal-simulator --version
+          cargo phoxal simulation --version
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            ldd "$CARGO_HOME/bin/phoxal-simulator" > dependencies
+          else
+            otool -L "$CARGO_HOME/bin/phoxal-simulator" > dependencies
+          fi
+          cat dependencies
+          if grep -q 'libmujoco' dependencies; then exit 1; fi
+          set +e
+          phoxal-simulator run --scene /missing/scene --bundle /missing/bundle --headless --steps 1 > native-output 2> native-error
+          status=$?
+          set -e
+          test "$status" = 1
+          grep 'MuJoCo 3.12.0 is not available' native-error
