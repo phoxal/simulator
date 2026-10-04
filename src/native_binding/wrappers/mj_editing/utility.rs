@@ -351,7 +351,7 @@ macro_rules! nested_handle {
 ///
 /// A leading `$kind with SpecObject:` also implements [`SpecObject`](super::traits::SpecObject).
 /// `$kind` is the element kind as MuJoCo camel-cases it (`Texture`, `HField`), which names both the
-/// [`MjtObj`] variant and the `mjs_as*` function. A trailing brace block adds methods to the
+/// `MjtObj` variant and the `mjs_as*` function. A trailing brace block adds methods to the
 /// `SpecItem` implementation.
 macro_rules! mjs_struct {
     (

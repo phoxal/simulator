@@ -7,7 +7,6 @@
 //! - [`MjModelError`] - model loading, saving, and state operations (`MjModel`).
 //! - [`MjVfsError`] - virtual file system operations (`MjVfs`).
 //! - [`MjPluginError`] - plugin library loading operations.
-//! - [`GlInitError`] - OpenGL / window initialization (feature-gated).
 use std::fmt;
 /// Errors that can occur in [`MjData`](crate::native_binding::wrappers::MjData) physics data
 /// and Jacobian operations.

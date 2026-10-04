@@ -1,6 +1,6 @@
 //! MuJoCo's unified logging API.
 //!
-//! [`crate::native_binding::logging`] holds the bridge that sends a MuJoCo message to the [`log`] crate.
+//! Typed native log configuration and message values.
 use crate::native_binding::mujoco_c::*;
 use crate::native_binding::util::printf_safe_cstring;
 use crate::{c_str_as_str_method, getter_setter};
