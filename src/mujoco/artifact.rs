@@ -1422,18 +1422,6 @@ mod closed_scope_tests {
         ]).expect("compiler asset directory applies across includes");
     }
 
-    #[cfg(feature = "native")]
-    #[test]
-    fn native_compiler_resolves_included_assets_with_the_same_scope() {
-        let artifact = ClosedModel::new("robot/main.xml", [
-            resource("robot/main.xml", r#"<mujoco><compiler meshdir="assets"/><include file="parts/assets.xml"/><worldbody><geom type="mesh" mesh="tetra"/></worldbody></mujoco>"#),
-            resource("robot/parts/assets.xml", r#"<mujoco><asset><mesh name="tetra" file="tetra.obj"/></asset></mujoco>"#),
-            resource("robot/assets/tetra.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n"),
-        ]).unwrap();
-        crate::mujoco::Model::from_closed(artifact)
-            .expect("native and admission path resolution agree");
-    }
-
     #[test]
     fn attached_model_cannot_hide_a_filesystem_escape() {
         let result = ClosedModel::new(

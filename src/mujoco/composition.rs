@@ -696,6 +696,7 @@ pub fn compose_model(
 }
 
 fn parse_spec_with_prefix(artifact: &ClosedModel, prefix: &str) -> Result<ParsedSpec, ModelError> {
+    crate::native_binding::initialize().map_err(composition_model_error)?;
     let mut vfs = MjVfs::new();
     for resource in artifact.resources() {
         let name = format!("{prefix}{}", resource.name());
@@ -715,6 +716,7 @@ fn parse_spec_with_prefixed_resources(
     artifact: &ClosedModel,
     extras: &[(&ClosedModel, String)],
 ) -> Result<ParsedSpec, ModelError> {
+    crate::native_binding::initialize().map_err(composition_model_error)?;
     let mut vfs = MjVfs::new();
     for resource in artifact.resources() {
         vfs.add_from_buffer(resource.name(), resource.bytes())

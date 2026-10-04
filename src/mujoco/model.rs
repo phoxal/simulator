@@ -39,6 +39,8 @@ impl Model {
     /// Returns [`ModelError`] when artifact admission, native parsing, or native
     /// compilation fails.
     pub fn from_closed(artifact: ClosedModel) -> Result<Self, ModelError> {
+        crate::native_binding::initialize()
+            .map_err(|error| native_error("library admission", error))?;
         let mut vfs = MjVfs::new();
         for resource in artifact.resources() {
             vfs.add_from_buffer(resource.name(), resource.bytes())
@@ -100,7 +102,7 @@ impl Model {
         self.identity
     }
 
-    /// Returns the MuJoCo version linked by the pinned binding.
+    /// Returns the MuJoCo version of the validated runtime-loaded library.
     #[must_use]
     pub fn native_version() -> &'static str {
         crate::native_binding::mujoco_version()
@@ -997,4 +999,25 @@ fn ensure_snapshot_model(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mujoco::artifact::Resource;
+
+    fn resource(name: &str, xml: &str) -> Resource {
+        Resource::new(name, xml.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn native_compiler_resolves_included_assets_with_the_same_scope() {
+        let artifact = ClosedModel::new("robot/main.xml", [
+            resource("robot/main.xml", r#"<mujoco><compiler meshdir="assets"/><include file="parts/assets.xml"/><worldbody><geom type="mesh" mesh="tetra"/></worldbody></mujoco>"#),
+            resource("robot/parts/assets.xml", r#"<mujoco><asset><mesh name="tetra" file="tetra.obj"/></asset></mujoco>"#),
+            resource("robot/assets/tetra.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n"),
+        ]).unwrap();
+        crate::mujoco::Model::from_closed(artifact)
+            .expect("native and admission path resolution agree");
+    }
 }
