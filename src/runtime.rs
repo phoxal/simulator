@@ -6,27 +6,61 @@ use crate::composition::load_composed_model;
 use crate::config::Options;
 use crate::config::Presentation;
 use crate::mujoco::Model;
-use crate::mujoco::PhysicsQuantum;
 use crate::mujoco::Scene;
 use crate::native_provider::ComponentProvider;
 use crate::remote::ProvenanceInput;
 use crate::remote::RemoteSceneRun;
 use crate::remote::SIMULATION_PROTOCOL;
-use crate::remote::quantum_nanoseconds;
 use serde::Serialize;
 
 pub(super) const CONTROL_PRINCIPAL: &str = "simulator";
 
+pub(super) struct PreparedNative {
+    bundle: BundleFacts,
+    model: Model,
+    quantum_ns: u64,
+    provider: ComponentProvider,
+    pub(super) context: phoxal::artifact::simulation_context::SimulationContext,
+}
+
+pub(super) fn prepare(options: &Options) -> Result<PreparedNative, String> {
+    let mut bundle = BundleFacts::load(&options.bundle)?;
+    let model = load_composed_model(&options.scene, &bundle)?;
+    let simulation = crate::bindings::simulation_definition(&bundle, &model)?;
+    let quantum_ns = simulation.quantum_ns;
+    let manifest =
+        crate::bundle::read_bounded_regular(&bundle.root.join("manifest.json"), 16 * 1024 * 1024)?;
+    let context =
+        phoxal::artifact::simulation_context::SimulationContext::new(&manifest, simulation.clone());
+    context.clone().admit(&manifest, &mut bundle.admitted)?;
+    bundle.simulation = Some(simulation);
+    // Resolve native inputs/outputs before any supervisor or participant starts.
+    let provider = build_provider(
+        &bundle,
+        &model,
+        bundle.simulation.as_ref().ok_or("missing native facts")?,
+    )?;
+    Ok(PreparedNative {
+        bundle,
+        model,
+        quantum_ns,
+        provider,
+        context,
+    })
+}
+
 pub(super) async fn run(
     options: Options,
     desktop: Option<crate::desktop::Worker>,
+    prepared: PreparedNative,
 ) -> Result<Option<crate::runtime::TerminalEvidence>, String> {
-    let bundle = BundleFacts::load(&options.bundle)?;
-    let model = load_composed_model(&options.scene, &bundle)?;
-    let quantum_ns = quantum_nanoseconds(
-        PhysicsQuantum::from_seconds(model.timestep()).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+    let PreparedNative {
+        bundle,
+        model,
+        quantum_ns,
+        provider,
+        ..
+    } = prepared;
 
     if options.probe {
         if !options.json {
@@ -52,32 +86,34 @@ pub(super) async fn run(
     let simulation = bundle
         .simulation
         .as_ref()
-        .ok_or_else(|| "run bundle has no phoxal.simulation.v1 contract".to_owned())?;
+        .ok_or_else(|| "native context has no phoxal.simulation.v1 contract".to_owned())?;
     if simulation.protocol != SIMULATION_PROTOCOL || simulation.mode != "controlled" {
         return Err(format!(
-            "bundle simulation contract is {} / {}, expected {} / controlled",
+            "native simulation contract is {} / {}, expected {} / controlled",
             simulation.protocol, simulation.mode, SIMULATION_PROTOCOL
         ));
     }
     if simulation.model_identity != model.identity().to_hex() {
         return Err(format!(
-            "bundle model identity {} does not match composed native model {}",
+            "native context model identity {} does not match composed native model {}",
             simulation.model_identity,
             model.identity().to_hex()
         ));
     }
     if simulation.quantum_ns != quantum_ns {
         return Err(format!(
-            "bundle quantum {}ns does not match composed native quantum {}ns",
+            "native context quantum {}ns does not match composed native quantum {}ns",
             simulation.quantum_ns, quantum_ns
         ));
     }
 
-    let requested_steps = options
-        .bound
-        .ok_or_else(|| "a run requires exactly one of --steps or --duration".to_owned())?
-        .steps(quantum_ns)?;
-    let provider = build_provider(&bundle, &model, simulation)?;
+    let requested_steps = match options.bound {
+        Some(bound) => bound.steps(quantum_ns)?,
+        // Interactive execution has no user-imposed bound; only the native
+        // boundary counter's representable range limits it.
+        None if options.presentation == crate::config::Presentation::Desktop => u64::MAX,
+        None => return Err("headless simulation requires a finite duration".into()),
+    };
     let scope = options
         .scope
         .as_deref()
@@ -121,6 +157,7 @@ pub(super) async fn run(
             requested_steps,
             presentation: options.presentation,
             auto_run: options.auto_run,
+            collect_every_boundary: options.simulation_run.is_some(),
         },
         desktop,
     )
@@ -142,6 +179,7 @@ struct RunRequest<'a> {
     requested_steps: u64,
     presentation: Presentation,
     auto_run: bool,
+    collect_every_boundary: bool,
 }
 
 async fn execute_remote_run(
@@ -157,6 +195,7 @@ async fn execute_remote_run(
         requested_steps,
         presentation,
         auto_run,
+        collect_every_boundary,
     } = request;
     let executions = supervisor
         .management()
@@ -197,6 +236,7 @@ async fn execute_remote_run(
         requested_steps,
         desktop,
         auto_run,
+        collect_every_boundary,
     )
     .await
     {

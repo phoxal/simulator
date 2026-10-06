@@ -17,7 +17,7 @@ pub enum NativeControlMode {
 /// One explicit wire-to-native actuator identity mapping.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActuatorTarget {
-    /// Actuator identity carried by the motion contract.
+    /// Component motor identity resolved from an authored connection.
     pub actuator_id: String,
     /// Model-local native actuator name passed to `Model::bind_actuator`.
     pub native_name: String,
@@ -51,10 +51,11 @@ pub struct ActuationDeclaration {
     pub port: String,
     /// Generated motion payload FQN.
     pub payload_fqn: String,
-    /// Complete wire-to-native actuator mappings.
+    /// Complete connection-to-native actuator mappings.
     pub targets: Vec<ActuatorTarget>,
 }
 
+#[cfg(test)]
 impl ActuationDeclaration {
     /// Creates the official motion actuator output binding.
     #[must_use]

@@ -53,8 +53,7 @@ impl BundleFacts {
         Ok(facts)
     }
 
-    /// The runtime record one instance launches, resolving its selected
-    /// conversion record for the adapter role.
+    /// The compiled runtime record selected for this instance.
     pub(super) fn runtime_record(
         &self,
         instance: &str,
@@ -209,7 +208,7 @@ pub(super) fn regular_file(path: &Path, display: &str) -> Result<(), String> {
 }
 
 /// Reads one file that must be regular and non-symbolic, bounded in size.
-fn read_bounded_regular(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+pub(super) fn read_bounded_regular(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -354,7 +353,6 @@ mod confinement_tests {
             "components": [],
             "component_sources": {},
             "model": model,
-            "simulation": null,
         })
     }
 

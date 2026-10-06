@@ -135,8 +135,9 @@ pub(super) fn run_owned(
             phoxal::artifact::application::HOST_EXECUTION_TARGET
         ));
     }
+    let prepared = crate::runtime::prepare(&options)?;
     if options.probe {
-        return engine(options, worker);
+        return engine(options, worker, prepared);
     }
     let mut supervisor = None;
     let mut result_path: Option<PathBuf> = None;
@@ -145,6 +146,12 @@ pub(super) fn run_owned(
             .prefix("phoxal-sim-")
             .tempdir_in("/tmp")
             .map_err(|e| e.to_string())?;
+        let context = directory.path().join("native-context.json");
+        fs::write(
+            &context,
+            serde_json::to_vec(&prepared.context).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
         let ready = directory.path().join("ready.json");
         let result = directory.path().join("scenario-result.json");
         let endpoint = format!(
@@ -161,6 +168,10 @@ pub(super) fn run_owned(
         let mut command = Command::new(canonical);
         command
             .arg(&facts.root)
+            .arg("--launch-mode")
+            .arg("controlled")
+            .arg("--simulation-context")
+            .arg(&context)
             .arg("--state-dir")
             .arg(directory.path())
             .arg("--ready-file")
@@ -202,7 +213,7 @@ pub(super) fn run_owned(
     let supervisor_id = options.supervisor_id.clone();
     let run_id = options.run_id.clone();
     let started = Instant::now();
-    let mut outcome = engine(options, worker);
+    let mut outcome = engine(options, worker, prepared);
     let cleanup = supervisor
         .as_mut()
         .map(Supervisor::stop)
@@ -291,12 +302,13 @@ fn completion_result(
 fn engine(
     options: Options,
     worker: Option<crate::desktop::Worker>,
+    prepared: crate::runtime::PreparedNative,
 ) -> Result<Option<SimulatorTerminalEvidence>, String> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| e.to_string())?
-        .block_on(crate::runtime::run(options, worker))
+        .block_on(crate::runtime::run(options, worker, prepared))
 }
 
 #[cfg(test)]

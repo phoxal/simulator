@@ -108,6 +108,69 @@ pub(super) fn probe_contract(bundle: &BundleFacts, model: &Model) -> Result<Prob
     })
 }
 
+pub(super) fn simulation_definition(
+    bundle: &BundleFacts,
+    model: &Model,
+) -> Result<BundleSimulation, String> {
+    let contract = probe_contract(bundle, model)?;
+    let providers = contract
+        .providers
+        .into_iter()
+        .map(|provider| {
+            let RuntimeRecord::V0 { outputs, .. } = bundle
+                .runtime_record(&provider.service_instance)
+                .ok_or_else(|| "native provider has no compiled runtime".to_owned())?;
+            let output = outputs
+                .iter()
+                .find(|output| output.port.as_deref() == Some(&provider.port))
+                .ok_or_else(|| "native provider has no compiled output".to_owned())?;
+            let bytes = output
+                .max_bytes
+                .ok_or_else(|| "native provider has no byte bound".to_owned())?;
+            let items = output
+                .max_items
+                .or_else(|| provider.retained_latest.then_some(1))
+                .ok_or_else(|| "native provider has no item bound".to_owned())?;
+            Ok(BundleSimulationProvider {
+                rate_microhertz: provider.rate_microhertz,
+                service_instance: provider.service_instance,
+                port: provider.port,
+                shape: provider.shape,
+                retained_latest: provider.retained_latest,
+                lease_valid_for_ms: provider.lease_valid_for_ms,
+                input_fqn: provider.input_fqn,
+                payload_fqn: provider.payload_fqn,
+                service_fqn: provider.service_fqn,
+                method: provider.method,
+                max_message_bytes: u32::try_from(bytes)
+                    .map_err(|_| "native byte bound exceeds u32")?,
+                max_buffered_items: u32::try_from(items)
+                    .map_err(|_| "native item bound exceeds u32")?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(BundleSimulation {
+        protocol: SIMULATION_PROTOCOL.to_owned(),
+        mode: "controlled".to_owned(),
+        model_identity: model.identity().to_hex(),
+        quantum_ns: quantum_nanoseconds(
+            PhysicsQuantum::from_seconds(model.timestep()).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        providers,
+        actuation_bindings: contract
+            .actuation_bindings
+            .into_iter()
+            .map(|binding| BundleActuationBinding {
+                service_instance: binding.service_instance,
+                port: binding.port,
+                payload_fqn: binding.payload_fqn,
+                actuator_ids: binding.actuator_ids,
+            })
+            .collect(),
+    })
+}
+
 pub(super) fn generated_provider_facts(bundle: &BundleFacts) -> Result<Vec<ProbeProvider>, String> {
     let mut providers = Vec::new();
     for (instance_id, instance) in &bundle.instances {
@@ -191,88 +254,61 @@ pub(super) fn generated_actuation_facts(
     bundle: &BundleFacts,
     model: &Model,
 ) -> Result<Vec<ProbeActuation>, String> {
-    let mut targets = Vec::new();
-    for (instance, component) in &bundle.components {
-        if !component.driver {
-            continue;
+    let routes = phoxal::artifact::simulation_context::actuator_routes(&bundle.admitted)?;
+    let mut outputs = Vec::new();
+    for (source, targets) in routes {
+        let RuntimeRecord::V0 {
+            outputs: served, ..
+        } = bundle
+            .runtime_record(&source.instance)
+            .ok_or_else(|| format!("native actuator source {source} is not authored"))?;
+        let output = served
+            .iter()
+            .find(|output| output.port.as_deref() == Some(&source.endpoint))
+            .ok_or_else(|| format!("native actuator source {source} has no compiled output"))?;
+        let signature = output
+            .signature
+            .as_ref()
+            .ok_or("native actuator output has no compiled signature")?;
+        if signature.shape != MethodShape::Observation
+            || !signature.lease_valid_for_ms.is_some_and(|lease| lease > 0)
+            || signature.response
+                != phoxal::contracts::component::actuator::ActuatorCommand::full_name()
+        {
+            return Err(format!(
+                "native actuator source {source} is not a canonical actuator projection"
+            ));
         }
-        for (capability_name, capability) in component_definition(&component.definition).1 {
-            if capability.kind != "motor" {
-                continue;
-            }
-            if capability.target.kind != NativeTargetKind::Actuator {
-                return Err(format!(
-                    "component {instance} motor target must be an actuator, got {:?}",
-                    capability.target.kind
-                ));
-            }
+        for target in &targets {
+            let (instance, name) = target
+                .split_once('.')
+                .ok_or("invalid native actuator identity")?;
+            let component = bundle
+                .components
+                .get(instance)
+                .ok_or("native motor has no component")?;
+            let capability = component_definition(&component.definition)
+                .1
+                .get(name)
+                .ok_or("native motor capability absent")?;
             let native_name = format!(
-                "{}{capability_target}",
+                "{}{}",
                 native_component_prefix(bundle, instance),
-                capability_target = capability.target.id
+                capability.target.id
             );
             model
                 .bind_actuator(crate::contract::simulator_api::ACTUATORS, &native_name)
                 .map_err(|error| format!("actuator binding {native_name}: {error}"))?;
-            targets.push(format!("{instance}.{capability_name}"));
         }
-    }
-    targets.sort();
-    targets.dedup();
-    if targets.is_empty() {
-        return Err(
-            "the native probe cannot invent actuator membership: no selected motor capability has an explicit composed actuator name"
-                .to_owned(),
-        );
-    }
-    let mut outputs = Vec::new();
-    for instance in bundle.instances.keys() {
-        let Some(record) = bundle.runtime_record(instance) else {
-            continue;
-        };
-        for output in runtime_outputs(record) {
-            if !output.signature.as_ref().is_some_and(|signature| {
-                signature.shape == MethodShape::Observation
-                    && signature.lease_valid_for_ms.is_some()
-            }) {
-                continue;
-            }
-            let port = output
-                .port
-                .as_deref()
-                .ok_or_else(|| format!("setpoint output on {instance} has no generated port"))?;
-            let signature = output.signature.as_ref().ok_or_else(|| {
-                format!("setpoint output {instance}/{port} has no generated signature")
-            })?;
-            if port
-                != crate::contract::simulator_api::ACTUATORS
-                    .signature()
-                    .endpoint
-                || signature.response
-                    != phoxal::contracts::component::actuator::ActuatorSetpoint::full_name()
-            {
-                // Intermediate service intents are ordinary graph traffic.
-                // Only native actuator products belong in the physics input cut.
-                continue;
-            }
-            outputs.push(ProbeActuation {
-                service_instance: instance.clone(),
-                port: port.to_owned(),
-                payload_fqn: signature.response.clone(),
-                actuator_ids: targets.clone(),
-            });
-        }
+        outputs.push(ProbeActuation {
+            service_instance: source.instance,
+            port: source.endpoint,
+            payload_fqn: signature.response.clone(),
+            actuator_ids: targets.into_iter().collect(),
+        });
     }
     if outputs.is_empty() {
-        return Err(
-            "the native probe found no generated motion actuator setpoint output; refusing an invented control route"
-                .to_owned(),
-        );
-    }
-    if outputs.len() > 1 {
-        return Err(
-            "multiple motion actuator outputs would make native membership ambiguous".to_owned(),
-        );
+        return Err("native execution has no authored actuator input edges".into());
     }
     Ok(outputs)
 }
@@ -302,12 +338,8 @@ pub(super) fn build_provider(
         .actuation_bindings
         .iter()
         .map(|binding| {
-            if binding.port
-                != crate::contract::simulator_api::ACTUATORS
-                    .signature()
-                    .endpoint
-                || binding.payload_fqn
-                    != phoxal::contracts::component::actuator::ActuatorSetpoint::full_name()
+            if binding.payload_fqn
+                != phoxal::contracts::component::actuator::ActuatorCommand::full_name()
             {
                 return Err(format!(
                     "simulation actuation {}/{} does not use generated motion constants",
@@ -353,10 +385,12 @@ pub(super) fn build_provider(
                     Ok(ActuatorTarget::new(actuator_id.clone(), native_name, mode))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            Ok(ActuationDeclaration::motion(
-                binding.service_instance.clone(),
+            Ok(ActuationDeclaration {
+                service_instance: binding.service_instance.clone(),
+                port: binding.port.clone(),
+                payload_fqn: binding.payload_fqn.clone(),
                 targets,
-            ))
+            })
         })
         .collect::<Result<Vec<_>, String>>()?;
     let cadence = providers

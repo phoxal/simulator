@@ -83,8 +83,37 @@ fn start_worker(options: Options, display: Arc<Mutex<DisplayState>>) -> Result<C
 }
 
 pub(super) fn run(options: Options) -> Result<Option<crate::runtime::TerminalEvidence>, String> {
-    let display = Arc::new(Mutex::new(DisplayState::default()));
-    let control = Arc::new(Mutex::new(start_worker(options.clone(), display.clone())?));
+    open(Some(options))
+}
+
+pub(super) fn idle() -> Result<Option<crate::runtime::TerminalEvidence>, String> {
+    open(None)
+}
+
+fn open(options: Option<Options>) -> Result<Option<crate::runtime::TerminalEvidence>, String> {
+    let display = Arc::new(Mutex::new(DisplayState {
+        finished: options.is_none(),
+        ..Default::default()
+    }));
+    let control = match &options {
+        Some(options) => start_worker(options.clone(), display.clone())?,
+        None => {
+            let (commands, _) = mpsc::sync_channel(1);
+            Control {
+                commands,
+                thread: None,
+            }
+        }
+    };
+    let build_path = options
+        .as_ref()
+        .map(|options| options.bundle.display().to_string())
+        .unwrap_or_default();
+    let scene_path = options
+        .as_ref()
+        .map(|options| options.scene.display().to_string())
+        .unwrap_or_default();
+    let control = Arc::new(Mutex::new(control));
     let shutdown = control.clone();
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -101,6 +130,8 @@ pub(super) fn run(options: Options) -> Result<Option<crate::runtime::TerminalEvi
                 control,
                 display,
                 options,
+                build_path,
+                scene_path,
                 restart: 0,
                 texture: None,
                 message: None,
@@ -115,18 +146,23 @@ pub(super) fn run(options: Options) -> Result<Option<crate::runtime::TerminalEvi
     // Closing the command channel also stops the run if the finite queue is full.
     let (disconnected, _) = mpsc::sync_channel(1);
     owner.commands = disconnected;
-    let thread = owner.thread.take().ok_or("desktop worker has no owner")?;
+    let thread = owner.thread.take();
     drop(owner);
-    let simulation = thread
-        .join()
-        .map_err(|_| "simulation worker panicked".to_owned())?;
+    let simulation = match thread {
+        Some(thread) => thread
+            .join()
+            .map_err(|_| "simulation worker panicked".to_owned())?,
+        None => Ok(None),
+    };
     gui.and(simulation)
 }
 
 struct Desktop {
     control: Arc<Mutex<Control>>,
     display: Arc<Mutex<DisplayState>>,
-    options: Options,
+    options: Option<Options>,
+    build_path: String,
+    scene_path: String,
     restart: u64,
     texture: Option<egui::TextureHandle>,
     message: Option<String>,
@@ -184,6 +220,8 @@ impl eframe::App for Desktop {
                     ui.separator();
                     let status = if state.error.is_some() {
                         "Failed"
+                    } else if self.options.is_none() {
+                        "Idle"
                     } else if state.finished {
                         "Stopped"
                     } else if !state.ready {
@@ -199,6 +237,37 @@ impl eframe::App for Desktop {
                         egui::Color32::from_rgb(96, 215, 182)
                     }));
                 });
+                if state.finished {
+                    ui.add_space(16.0);
+                    ui.label("Robot build directory");
+                    ui.add(egui::TextEdit::singleline(&mut self.build_path).desired_width(f32::INFINITY));
+                    ui.label("Scene file");
+                    ui.add(egui::TextEdit::singleline(&mut self.scene_path).desired_width(f32::INFINITY));
+                    let selected = !self.build_path.trim().is_empty() && !self.scene_path.trim().is_empty();
+                    if ui.add_enabled(selected, egui::Button::new("Open simulation")).clicked() {
+                        let options = Options {
+                            simulation_run: None, probe: false,
+                            scene: self.scene_path.trim().into(), bundle: self.build_path.trim().into(),
+                            json: false, presentation: crate::config::Presentation::Desktop,
+                            scope: Some("local".into()), connect: None,
+                            supervisor_id: Some("local".into()), run_id: Some("desktop".into()),
+                            bound: None, auto_run: true,
+                        };
+                        let result = (|| -> Result<(), String> {
+                            let mut owner = self.control.lock().map_err(|_| "desktop control lock poisoned")?;
+                            if let Some(thread) = owner.thread.take() {
+                                // The previous execution has already joined all child processes.
+                                let _ = thread.join().map_err(|_| "simulation worker panicked")?;
+                            }
+                            *owner = start_worker(options.clone(), self.display.clone())?;
+                            self.options = Some(options);
+                            *state = DisplayState::default();
+                            self.texture = None;
+                            Ok(())
+                        })();
+                        self.message = result.err();
+                    }
+                }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(
@@ -231,7 +300,7 @@ impl eframe::App for Desktop {
                             }
                         },
                     );
-                    if state.finished && ui.button("Restart").clicked() {
+                    if state.finished && self.options.is_some() && ui.button("Restart").clicked() {
                         let result = (|| -> Result<(), String> {
                             let mut owner = self
                                 .control
@@ -241,7 +310,7 @@ impl eframe::App for Desktop {
                                 let _ = thread.join().map_err(|_| "simulation worker panicked")?;
                             }
                             self.restart += 1;
-                            let mut options = self.options.clone();
+                            let mut options = self.options.clone().ok_or("no execution is selected")?;
                             options.run_id = Some(format!(
                                 "{}-restart-{}",
                                 options.run_id.as_deref().unwrap_or("desktop"),
@@ -276,8 +345,13 @@ impl eframe::App for Desktop {
                         egui::Layout::top_down(egui::Align::Center),
                         |ui| {
                             ui.add_space(((available.y - 52.0) / 2.0).max(0.0));
-                            ui.spinner();
-                            ui.label("Preparing native scene…");
+                            if self.options.is_none() {
+                                ui.label(egui::RichText::new("Open a robot build to begin").size(22.0));
+                                ui.label("Choose its runnable directory and an explicit scene file above.");
+                            } else {
+                                ui.spinner();
+                                ui.label("Preparing native scene…");
+                            }
                         },
                     );
                 }

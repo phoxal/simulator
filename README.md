@@ -33,19 +33,25 @@ An explicit path takes precedence and is never silently replaced with another li
 The internal binding adaptation retains the upstream licenses and generates typed runtime symbol dispatch from the original ABI declaration.
 The library stays loaded for all engine objects and their destruction.
 
-## Run a robot project
-
-From robot-rover:
+## Open and run
 
 ```sh
-cargo phoxal simulation project
+phoxal-simulator
 ```
 
-This opens a desktop simulation and starts advancing its scene.
-The simulator invokes the public `cargo phoxal build --simulation-scene simulation/scene.xml` command to prepare a temporary bundle, then owns its execution.
-`cargo phoxal simulation` is a thin process proxy to this application's parser, streams, and exit status.
-Use `--scene <file>` for another scene, `--steps <count>` for the finite bound, or `--paused` to open paused.
-The default bound is 10,000 native steps.
+This checks the user-managed MuJoCo prerequisite and opens an idle desktop window.
+No supervisor or participants start until a build directory and an explicit scene are selected.
+Help and version remain native-library-free.
+
+From robot-rover, the separate source-development command prepares and launches the robot:
+
+```sh
+cargo phoxal simulation simulation/scene.xml
+```
+
+The CLI owns Cargo and assembly; the simulator consumes the runnable directory and owns execution.
+Desktop runs advance immediately and have no arbitrary step-count limit.
+Use `--paused` for paused startup and `--duration 10s` for an explicit time bound.
 
 - **Pause / Run** suspends and resumes the current execution.
 - **Step** advances one native boundary while paused.
@@ -60,10 +66,17 @@ Hardware actuation is outside this simulation workflow.
 A prepared bundle can also be run directly:
 
 ```sh
-phoxal-simulator run --bundle /path/to/bundle --scene /path/to/bundle/scene/scene.xml --desktop --steps 10000 --auto-run
+phoxal-simulator run /path/to/scene.xml --build /path/to/build
 ```
 
-Use `--headless` instead of `--desktop` for finite qualification.
+The same runnable build can be launched by the supervisor for hardware or consumed by the simulator.
+Simulation validates its native model and the compiled component contracts before starting any participant.
+The authored instances and connections stay intact; the simulator implements selected components natively, and the supervisor launches the brain and services without starting physical drivers.
+A command-owned native context and execution state live outside the build and are removed after cleanup.
+The validated model and providers stay alive through execution, rather than reopening mutable scene resources after launch.
+
+Use `--headless --duration 10s` for finite qualification.
+Durations accept units such as `10s` and `250ms`.
 Both presentations use the same native coordinator, authenticated public protocol, actuator admission, observation capture, and receiver receipts.
 Unknown transitions or required process, capture, and delivery failures stop the run.
 Scenario execution uses a prepared run specification through `--simulation-run`; its results are reported after owned process cleanup.
@@ -83,7 +96,7 @@ Native host acceptance additionally needs the external qualified library and gra
 
 ```sh
 PHOXAL_MUJOCO_LIBRARY=/path/to/library cargo test --bin phoxal-simulator
-cargo phoxal test forward_turn_stop -- --nocapture
+cargo phoxal scenario scenarios/forward_stop.rs
 ```
 
 CI and release qualification deliberately use `--locked` to check the committed application lockfile.

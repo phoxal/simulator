@@ -82,11 +82,8 @@ fn component_encoder_reads_native_joint_and_applies_velocity() {
     assert_eq!(sample.position_rad, Some(0.0));
     assert_eq!(sample.velocity_radps, Some(0.0));
 
-    let setpoint = phoxal::contracts::component::actuator::ActuatorSetpoint {
-        targets: vec![phoxal::contracts::component::actuator::ActuatorTarget {
-            actuator_id: "wheel__motor".to_owned(),
-            control: Some(phoxal::contracts::component::actuator::Control::VelocityRadps(3.0)),
-        }],
+    let setpoint = phoxal::contracts::component::actuator::ActuatorCommand {
+        control: Some(phoxal::contracts::component::actuator::Control::VelocityRadps(3.0)),
     };
     let controls = provider
         .controls(
@@ -173,3 +170,66 @@ fn georeference_uses_wgs84_ellipsoid_with_enu_yaw() {
 }
 
 mod numerical;
+
+#[test]
+fn unwired_motor_stays_zero_while_declared_routes_remain_complete() {
+    let model = Model::from_xml(r#"<mujoco><option timestep="0.002" gravity="0 0 0"/><worldbody><body><joint name="wired_joint"/><geom type="sphere" size="0.1" mass="1"/></body><body pos="1 0 0"><joint name="unwired_joint"/><geom type="sphere" size="0.1" mass="1"/></body></worldbody><actuator><velocity name="wired" joint="wired_joint" kv="1"/><velocity name="unwired" joint="unwired_joint" kv="1"/></actuator></mujoco>"#).expect("two native motors");
+    let providers = ProviderSet::new(vec![provider_requirement(
+        "wheel",
+        crate::contract::simulator_api::ENCODER,
+    )])
+    .expect("observation provider");
+    let mut provider = ComponentProvider::new(
+        &model,
+        providers,
+        [ObservationBinding::ddsm115_encoder_joint(
+            "wheel",
+            "wired_joint",
+        )],
+        [ActuationDeclaration::motion(
+            "motion",
+            [ActuatorTarget::new(
+                "wheel.motor",
+                "wired",
+                NativeControlMode::Velocity,
+            )],
+        )],
+        std::collections::BTreeMap::from([(
+            ("wheel".into(), "encoder".into()),
+            crate::cadence::Cadence::new(500.0, 2_000_000).expect("cadence"),
+        )]),
+    )
+    .expect("only authored native control is mapped");
+    let frame = Actuation {
+        membership: Some(ProductMembership {
+            producer: "motion".into(),
+            port: "actuators".into(),
+            ..ProductMembership::default()
+        }),
+        valid_until_ns: 2_000_000,
+        payload: phoxal::contracts::component::actuator::ActuatorCommand {
+            control: Some(phoxal::contracts::component::actuator::Control::VelocityRadps(3.0)),
+        }
+        .encode_to_vec(),
+    };
+    assert_eq!(
+        provider
+            .controls(&model, std::slice::from_ref(&frame))
+            .expect("declared control"),
+        vec![3.0, 0.0]
+    );
+    assert!(
+        provider.controls(&model, &[]).is_err(),
+        "missing a declared route remains a failure"
+    );
+    let mut extra = frame;
+    extra.membership.as_mut().unwrap().port = "unwired_actuator".into();
+    extra.payload = phoxal::contracts::component::actuator::ActuatorCommand {
+        control: Some(phoxal::contracts::component::actuator::Control::VelocityRadps(3.0)),
+    }
+    .encode_to_vec();
+    assert!(
+        provider.controls(&model, &[extra]).is_err(),
+        "an undeclared port cannot claim an unwired motor"
+    );
+}

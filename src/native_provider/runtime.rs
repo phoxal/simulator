@@ -286,7 +286,7 @@ impl NativeProvider for ComponentProvider {
         model: &Model,
         actuation: &[Actuation],
     ) -> Result<Vec<f64>, Self::Error> {
-        let expected_fqn = phoxal::contracts::component::actuator::ActuatorSetpoint::full_name();
+        let expected_fqn = phoxal::contracts::component::actuator::ActuatorCommand::full_name();
         if actuation.len() != self.actuations.len() {
             return Err(NativeProviderError::InvalidActuation(format!(
                 "actuation cut has {}, expected {} configured outputs",
@@ -341,41 +341,18 @@ impl NativeProvider for ComponentProvider {
                     binding.binding.payload_fqn()
                 )));
             }
-            let setpoint = phoxal::contracts::component::actuator::ActuatorSetpoint::decode(
+            let setpoint = phoxal::contracts::component::actuator::ActuatorCommand::decode(
                 item.payload.as_slice(),
             )?;
-            let required = binding
-                .targets
-                .iter()
-                .map(|target| target.wire_id.as_str())
-                .collect::<std::collections::HashSet<_>>();
-            let actual = setpoint
-                .targets
-                .iter()
-                .map(|target| target.actuator_id.as_str())
-                .collect::<std::collections::HashSet<_>>();
-            if actual != required || actual.len() != setpoint.targets.len() {
-                return Err(NativeProviderError::InvalidActuation(
-                    "actuation targets do not match configured actuator membership".to_owned(),
-                ));
-            }
+            let control = setpoint.control.as_ref().ok_or_else(|| {
+                NativeProviderError::InvalidActuation(format!(
+                    "actuation {}/{} has no control selection",
+                    route.0, route.1
+                ))
+            })?;
+            // Every destination is admitted from this port's authored edges.
+            // Scalar payloads cannot add or redirect native motor membership.
             for target in &binding.targets {
-                let wire_target = setpoint
-                    .targets
-                    .iter()
-                    .find(|candidate| candidate.actuator_id == target.wire_id)
-                    .ok_or_else(|| {
-                        NativeProviderError::InvalidActuation(format!(
-                            "actuation {} omits configured target {}",
-                            route.1, target.wire_id
-                        ))
-                    })?;
-                let control = wire_target.control.as_ref().ok_or_else(|| {
-                    NativeProviderError::InvalidActuation(format!(
-                        "actuator {} has no control selection",
-                        target.wire_id
-                    ))
-                })?;
                 let value = match (target.mode, control) {
                     (
                         NativeControlMode::Torque,
@@ -421,13 +398,18 @@ impl NativeProvider for ComponentProvider {
                 controls[control_index] = value;
             }
         }
-        if routes.len() != actuation.len() || covered.len() != controls.len() {
+        let expected_controls = self
+            .actuations
+            .iter()
+            .map(|binding| binding.targets.len())
+            .sum::<usize>();
+        if routes.len() != actuation.len() || covered.len() != expected_controls {
             return Err(NativeProviderError::InvalidActuation(format!(
                 "actuation covers {} routes and {} native controls, expected {} routes and {} controls",
                 routes.len(),
                 covered.len(),
                 self.actuations.len(),
-                controls.len()
+                expected_controls
             )));
         }
         Ok(controls)

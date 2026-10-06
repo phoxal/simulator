@@ -6,7 +6,7 @@
 //! drivers' capability declarations generate. The simulator authors no
 //! component-owned schemas of its own.
 
-use phoxal::contracts::component::actuator::ActuatorSetpoint;
+use phoxal::contracts::component::actuator::ActuatorCommand;
 use phoxal::contracts::component::camera::{CameraFrame, DepthFrame};
 use phoxal::contracts::component::encoder::EncoderSample;
 use phoxal::contracts::component::gnss::GnssSample;
@@ -18,7 +18,7 @@ use phoxal::contracts::{Latest, Queue};
 #[phoxal::endpoints]
 pub struct SimulatorApi {
     #[phoxal::output(projection = state, lease_ms = 100, max_bytes = 1024)]
-    actuators: Latest<ActuatorSetpoint>,
+    actuators: Latest<ActuatorCommand>,
 
     #[phoxal::output(max_items = 16, max_bytes = 8192)]
     encoder: Queue<EncoderSample>,

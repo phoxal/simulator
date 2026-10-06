@@ -56,9 +56,8 @@ fn missing_library_is_an_actionable_native_error_before_bundle_access() {
         .env("PHOXAL_MUJOCO_LIBRARY", "/missing/mujoco")
         .args([
             "run",
-            "--scene",
             "/missing/scene",
-            "--bundle",
+            "--build",
             "/missing/bundle",
             "--headless",
             "--steps",
@@ -112,9 +111,8 @@ fn unsupported_version_is_rejected_before_resolving_model_symbols() {
         .env("PHOXAL_MUJOCO_LIBRARY", library)
         .args([
             "run",
-            "--scene",
             "scene",
-            "--bundle",
+            "--build",
             "bundle",
             "--headless",
             "--steps",
@@ -142,9 +140,8 @@ fn accepted_version_still_requires_the_complete_native_symbol_set() {
         .env("PHOXAL_MUJOCO_LIBRARY", library)
         .args([
             "run",
-            "--scene",
             "scene",
-            "--bundle",
+            "--build",
             "bundle",
             "--headless",
             "--steps",
@@ -155,4 +152,16 @@ fn accepted_version_still_requires_the_complete_native_symbol_set() {
     assert_eq!(result.status.code(), Some(1));
     let error = String::from_utf8_lossy(&result.stderr);
     assert!(error.contains("MuJoCo symbol"), "{error}");
+}
+
+#[test]
+fn idle_start_checks_native_prerequisites_without_starting_a_robot() {
+    let result = simulator()
+        .env("PHOXAL_MUJOCO_LIBRARY", "/missing/mujoco")
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(1));
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(error.contains("MuJoCo 3.12.0 is not available"), "{error}");
+    assert!(!error.contains("bundle"), "{error}");
 }

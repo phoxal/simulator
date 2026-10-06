@@ -102,13 +102,8 @@ impl SimulationTransport for Peer {
     ) -> SimulationFuture<'_, PrepareBoundaryResponse, String> {
         Box::pin(async move {
             let key = r.transition_key.as_ref().unwrap();
-            let payload = phoxal::contracts::component::actuator::ActuatorSetpoint {
-                targets: vec![phoxal::contracts::component::actuator::ActuatorTarget {
-                    actuator_id: "motor".into(),
-                    control: Some(
-                        phoxal::contracts::component::actuator::Control::VelocityRadps(1.0),
-                    ),
-                }],
+            let payload = phoxal::contracts::component::actuator::ActuatorCommand {
+                control: Some(phoxal::contracts::component::actuator::Control::VelocityRadps(1.0)),
             }
             .encode_to_vec();
             let member = ProductMembership {

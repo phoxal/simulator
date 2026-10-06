@@ -1149,13 +1149,8 @@ pub(crate) fn validate_bindings_for_model(
             }
         }
     }
-    let expected = model.counts().controls;
-    if controls.len() != expected {
-        return Err(ActuationBindingError::MissingNativeControl {
-            expected,
-            actual: controls.len(),
-        });
-    }
+    // Unwired native controls stay inactive. Only authored routes may claim a
+    // control; unknown targets and duplicate ownership remain refused above.
     Ok(())
 }
 
@@ -1195,8 +1190,6 @@ pub enum ActuationBindingError {
     UnknownNativeActuator { actuator_id: String },
     /// A model lookup failed while validating a configured native actuator.
     NativeModel { detail: String },
-    /// The configured bindings do not cover every scalar native control.
-    MissingNativeControl { expected: usize, actual: usize },
 }
 
 #[cfg(feature = "native")]
@@ -1259,10 +1252,6 @@ impl fmt::Display for ActuationBindingError {
             Self::NativeModel { detail } => {
                 write!(formatter, "native model binding lookup failed: {detail}")
             }
-            Self::MissingNativeControl { expected, actual } => write!(
-                formatter,
-                "actuation bindings cover {actual} native controls, expected {expected}"
-            ),
         }
     }
 }

@@ -21,6 +21,7 @@ pub(super) async fn drive(
     requested_steps: u64,
     desktop: Option<Worker>,
     auto_run: bool,
+    collect_every_boundary: bool,
 ) -> Result<Vec<StateSnapshot>, String> {
     let mut running = desktop.is_none() || auto_run;
     let mut snapshots = vec![run.state().clone()];
@@ -76,6 +77,8 @@ pub(super) async fn drive(
                 Ok(Command::Reset) => {
                     running = false;
                     run.reset().await.map_err(|e| e.to_string())?;
+                    snapshots.clear();
+                    snapshots.push(run.state().clone());
                     frame_due = true;
                 }
                 Ok(Command::Stop) | Err(TryRecvError::Disconnected) => break,
@@ -90,7 +93,10 @@ pub(super) async fn drive(
         }
         if (running || single_step) && run.boundary() < requested_steps {
             step(run).await?;
-            if run.boundary().is_multiple_of(10) || run.boundary() == requested_steps {
+            if collect_every_boundary
+                || run.boundary().is_multiple_of(10)
+                || run.boundary() == requested_steps
+            {
                 snapshots.push(run.state().clone());
             }
             frame_due = true;

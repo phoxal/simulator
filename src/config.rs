@@ -1,8 +1,5 @@
 use std::path::PathBuf;
 
-#[cfg(test)]
-use std::ffi::OsString;
-
 use clap::{ArgGroup, Parser};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,7 +11,7 @@ pub(super) enum Presentation {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum Bound {
     Steps(u64),
-    Duration(f64),
+    Duration(std::time::Duration),
 }
 
 #[derive(Debug, Clone)]
@@ -33,77 +30,147 @@ pub(super) struct Options {
     pub(super) auto_run: bool,
 }
 
+/// Application commands. Help and argument errors are resolved before native loading.
 #[derive(Debug, Parser)]
 #[command(
     name = "phoxal-simulator",
-    version = env!("CARGO_PKG_VERSION"),
-    about = "Run the native Phoxal MuJoCo simulator",
-    after_help = "Commands: project prepares and opens a robot project; run executes a prepared bundle; stage-scene copies a scene resource closure. Use <command> --help for options.",
-    group(ArgGroup::new("presentation").required(true).args(["headless", "desktop"]))
+    version,
+    about = "Open or run a Phoxal simulation"
 )]
-struct Cli {
-    /// Prepared scenario run specification consumed by the supervisor.
-    #[arg(long)]
-    simulation_run: Option<PathBuf>,
-    /// Inspect the composed model without connecting to a supervisor.
-    #[arg(long)]
-    probe: bool,
+pub(super) struct Cli {
+    #[command(subcommand)]
+    pub(super) command: Option<AppCommand>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub(super) enum AppCommand {
+    /// Run an existing robot build with an explicitly selected scene.
+    Run(RunArgs),
+    /// Inspect native model facts for robot preparation without launching participants.
+    Probe(ProbeArgs),
+    /// Copy a scene's closed resource set for robot preparation, without native execution.
+    StageScene(StageSceneArgs),
+}
+
+#[derive(Debug, clap::Args)]
+#[command(group(ArgGroup::new("bound").args(["duration", "steps"])))]
+pub(super) struct RunArgs {
     /// Scene MJCF or MJZ archive.
+    pub(super) scene: PathBuf,
+    /// Existing runnable robot directory.
     #[arg(long)]
-    scene: PathBuf,
-    /// Prepared Phoxal bundle directory.
-    #[arg(long)]
-    bundle: PathBuf,
-    /// Emit machine-readable probe output.
-    #[arg(long, requires = "probe")]
-    json: bool,
-    /// Run without a presentation window.
-    #[arg(long, conflicts_with = "desktop")]
+    pub(super) build: PathBuf,
+    /// Execute without a window, with an explicit finite bound.
+    #[arg(long, requires = "bound")]
     headless: bool,
-    /// Open the interactive simulator window.
+    /// Simulated time to advance, for example 10s or 250ms.
+    #[arg(long, value_parser = positive_finite)]
+    duration: Option<std::time::Duration>,
+    /// Native boundaries requested by a prepared scenario.
+    #[arg(long, hide = true, value_parser = clap::value_parser!(u64).range(1..))]
+    steps: Option<u64>,
+    /// Open paused rather than immediately advancing.
     #[arg(long, conflicts_with = "headless")]
-    desktop: bool,
-    /// Supervisor router endpoint.
+    paused: bool,
+    /// Prepared scenario execution request supplied by the scenario command.
+    #[arg(long, hide = true)]
+    simulation_run: Option<PathBuf>,
+    /// Existing supervisor router, for externally owned executions.
     #[arg(long)]
     connect: Option<String>,
-    /// Deployment namespace.
+    #[arg(long, default_value = "local", value_parser = identity)]
+    scope: String,
+    #[arg(long, default_value = "local", value_parser = identity)]
+    supervisor_id: String,
+    #[arg(long, default_value = "local-simulation", value_parser = identity)]
+    run_id: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub(super) struct ProbeArgs {
+    /// Explicit scene whose native facts are inspected.
+    scene: PathBuf,
     #[arg(long)]
-    scope: Option<String>,
-    /// Supervisor identity within the namespace.
+    build: PathBuf,
+    /// Standard machine-readable native facts for the developer tool.
     #[arg(long)]
-    supervisor_id: Option<String>,
-    /// Finite simulation run identity.
+    json: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub(super) struct StageSceneArgs {
     #[arg(long)]
-    run_id: Option<String>,
-    /// Advance exactly this many native quanta.
-    #[arg(long, conflicts_with = "duration", value_parser = clap::value_parser!(u64).range(1..))]
-    steps: Option<u64>,
-    /// Advance exactly this many seconds.
-    #[arg(long, conflicts_with = "steps", value_parser = positive_finite)]
-    duration: Option<f64>,
-    /// Start a desktop run immediately instead of paused.
+    pub(super) scene: PathBuf,
     #[arg(long)]
-    auto_run: bool,
+    pub(super) output: PathBuf,
+}
+
+impl RunArgs {
+    pub(super) fn into_options(self) -> Options {
+        Options {
+            simulation_run: self.simulation_run,
+            probe: false,
+            scene: self.scene,
+            bundle: self.build,
+            json: false,
+            presentation: if self.headless {
+                Presentation::Headless
+            } else {
+                Presentation::Desktop
+            },
+            scope: Some(self.scope),
+            connect: self.connect,
+            supervisor_id: Some(self.supervisor_id),
+            run_id: Some(self.run_id),
+            bound: self
+                .duration
+                .map(Bound::Duration)
+                .or(self.steps.map(Bound::Steps)),
+            auto_run: !self.paused,
+        }
+    }
+}
+
+impl ProbeArgs {
+    pub(super) fn into_options(self) -> Options {
+        Options {
+            simulation_run: None,
+            probe: true,
+            scene: self.scene,
+            bundle: self.build,
+            json: self.json,
+            presentation: Presentation::Headless,
+            scope: None,
+            connect: None,
+            supervisor_id: None,
+            run_id: None,
+            bound: None,
+            auto_run: false,
+        }
+    }
+}
+
+fn identity(value: &str) -> Result<String, String> {
+    validate_identity(value, "identity")?;
+    Ok(value.to_owned())
 }
 
 impl Bound {
     pub(super) fn steps(self, quantum_ns: u64) -> Result<u64, String> {
         match self {
             Self::Steps(steps) => Ok(steps),
-            Self::Duration(seconds) => {
-                let duration_ns = seconds * 1_000_000_000.0;
-                let quanta = duration_ns / quantum_ns as f64;
-                let nearest = quanta.round();
-                let tolerance = f64::EPSILON * quanta.abs().max(1.0) * 16.0;
-                if !quanta.is_finite() || nearest < 1.0 || (quanta - nearest).abs() > tolerance {
+            Self::Duration(duration) => {
+                if quantum_ns == 0 {
+                    return Err("simulation quantum must be positive".into());
+                }
+                let nanos = duration.as_nanos();
+                if nanos == 0 || nanos % u128::from(quantum_ns) != 0 {
                     return Err(format!(
-                        "duration {seconds} seconds is not an integral number of {quantum_ns}ns simulation quanta"
+                        "duration {duration:?} is not an integral number of {quantum_ns}ns simulation quanta"
                     ));
                 }
-                if nearest > u64::MAX as f64 {
-                    return Err("duration produces too many simulation steps".to_owned());
-                }
-                Ok(nearest as u64)
+                u64::try_from(nanos / u128::from(quantum_ns))
+                    .map_err(|_| "duration produces too many simulation steps".into())
             }
         }
     }
@@ -118,88 +185,12 @@ impl Presentation {
     }
 }
 
-impl Options {
-    pub(super) fn from_env() -> Result<Self, String> {
-        let mut arguments: Vec<_> = std::env::args_os().collect();
-        if arguments.get(1).is_some_and(|arg| arg == "run") {
-            arguments.remove(1);
-        }
-        Self::from_cli(Cli::parse_from(arguments))
+fn positive_finite(value: &str) -> Result<std::time::Duration, String> {
+    let duration = humantime::parse_duration(value).map_err(|error| error.to_string())?;
+    if duration.is_zero() {
+        return Err("duration must be positive (for example 10s or 250ms)".into());
     }
-
-    #[cfg(test)]
-    pub(super) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, String> {
-        let arguments = std::iter::once(OsString::from("phoxal-simulator")).chain(args);
-        let cli = Cli::try_parse_from(arguments).map_err(|error| error.to_string())?;
-        Self::from_cli(cli)
-    }
-
-    fn from_cli(cli: Cli) -> Result<Self, String> {
-        let presentation = if cli.headless {
-            Presentation::Headless
-        } else {
-            Presentation::Desktop
-        };
-        let bound = match (cli.steps, cli.duration) {
-            (Some(steps), None) => Some(Bound::Steps(steps)),
-            (None, Some(duration)) => Some(Bound::Duration(duration)),
-            (None, None) => None,
-            (Some(_), Some(_)) => unreachable!("clap rejects conflicting bounds"),
-        };
-        if cli.probe {
-            if cli.connect.is_some()
-                || cli.scope.is_some()
-                || cli.supervisor_id.is_some()
-                || cli.run_id.is_some()
-                || bound.is_some()
-                || cli.auto_run
-            {
-                return Err(
-                    "probe accepts model facts only; remove run identity and finite-bound options"
-                        .to_owned(),
-                );
-            }
-        } else {
-            if bound.is_none() {
-                return Err("a run requires exactly one of --steps or --duration".to_owned());
-            }
-        }
-        for (field, value) in [
-            ("scope", cli.scope.as_deref()),
-            ("supervisor id", cli.supervisor_id.as_deref()),
-            ("run id", cli.run_id.as_deref()),
-        ] {
-            if let Some(value) = value {
-                validate_identity(value, field)?;
-            }
-        }
-        Ok(Self {
-            simulation_run: cli.simulation_run,
-            probe: cli.probe,
-            scene: cli.scene,
-            bundle: cli.bundle,
-            json: cli.json,
-            presentation,
-            scope: (!cli.probe).then(|| cli.scope.unwrap_or_else(|| "local".into())),
-            connect: cli.connect,
-            supervisor_id: (!cli.probe)
-                .then(|| cli.supervisor_id.unwrap_or_else(|| "local".into())),
-            run_id: (!cli.probe).then(|| cli.run_id.unwrap_or_else(|| "local-simulation".into())),
-            bound,
-            auto_run: cli.auto_run,
-        })
-    }
-}
-
-fn positive_finite(value: &str) -> Result<f64, String> {
-    let value = value
-        .parse::<f64>()
-        .map_err(|_| "duration must be a positive finite number".to_owned())?;
-    if value.is_finite() && value > 0.0 {
-        Ok(value)
-    } else {
-        Err("duration must be a positive finite number".to_owned())
-    }
+    Ok(duration)
 }
 
 fn validate_identity(value: &str, field: &str) -> Result<(), String> {
@@ -218,170 +209,82 @@ fn validate_identity(value: &str, field: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{Bound, Options, Presentation};
-    use std::ffi::OsString;
+    use super::*;
 
-    fn parse(arguments: &[&str]) -> Result<Options, String> {
-        Options::parse(arguments.iter().copied().map(OsString::from))
+    fn run(args: &[&str]) -> Result<Options, String> {
+        let cli =
+            Cli::try_parse_from(std::iter::once("phoxal-simulator").chain(args.iter().copied()))
+                .map_err(|error| error.to_string())?;
+        match cli.command {
+            Some(AppCommand::Run(args)) => Ok(args.into_options()),
+            _ => Err("expected run".into()),
+        }
     }
 
     #[test]
-    fn probe_requires_closed_scene_facts_and_json() {
-        let options = parse(&[
-            "--probe",
-            "--scene",
-            "scene.xml",
-            "--bundle",
-            "bundle",
-            "--json",
-            "--headless",
-        ])
-        .expect("probe options");
-        assert!(options.probe);
-        assert!(options.json);
-        assert_eq!(options.presentation, Presentation::Headless);
+    fn desktop_has_no_default_bound_and_can_start_paused() {
+        let options = run(&["run", "scene.xml", "--build", "build"]).unwrap();
+        assert_eq!(options.presentation, Presentation::Desktop);
         assert!(options.bound.is_none());
+        assert!(options.auto_run);
+        assert!(
+            !run(&["run", "scene.xml", "--build", "build", "--paused"])
+                .unwrap()
+                .auto_run
+        );
     }
 
     #[test]
-    fn run_requires_exact_public_identity_and_finite_bound() {
-        let options = parse(&[
-            "--scene",
-            "scene.xml",
-            "--bundle",
-            "bundle",
-            "--headless",
-            "--connect",
-            "unixsock-stream//tmp/test.sock",
-            "--scope",
-            "local",
-            "--supervisor-id",
-            "sim",
-            "--run-id",
+    fn headless_has_a_finite_time_bound() {
+        let options = run(&[
             "run",
-            "--steps",
-            "12",
+            "scene.xml",
+            "--build",
+            "build",
+            "--headless",
+            "--duration",
+            "300ms",
         ])
-        .expect("run options");
-        assert!(!options.probe);
-        assert_eq!(options.bound, Some(Bound::Steps(12)));
-        assert_eq!(options.scope.as_deref(), Some("local"));
+        .unwrap();
+        assert_eq!(
+            options.bound,
+            Some(Bound::Duration(std::time::Duration::from_millis(300)))
+        );
+        assert!(run(&["run", "scene.xml", "--build", "build", "--headless"]).is_err());
     }
 
     #[test]
-    fn options_reject_mixed_probe_and_run_modes() {
+    fn no_request_selects_idle_without_a_run() {
         assert!(
-            parse(&[
-                "--probe",
-                "--scene",
-                "scene.xml",
-                "--bundle",
-                "bundle",
-                "--json",
-                "--steps",
-                "1",
-            ])
-            .is_err()
-        );
-        assert!(
-            parse(&[
-                "--scene",
-                "scene.xml",
-                "--bundle",
-                "bundle",
-                "--headless",
-                "--connect",
-                "unixsock-stream//tmp/test.sock",
-                "--scope",
-                "local",
-                "--supervisor-id",
-                "sim",
-                "--run-id",
-                "run",
-            ])
-            .is_err()
-        );
-        assert!(
-            parse(&[
-                "--scene",
-                "scene.xml",
-                "--bundle",
-                "bundle",
-                "--headless",
-                "--desktop",
-                "--connect",
-                "unixsock-stream//tmp/test.sock",
-                "--scope",
-                "local",
-                "--supervisor-id",
-                "sim",
-                "--run-id",
-                "run",
-                "--steps",
-                "1",
-            ])
-            .is_err()
+            Cli::try_parse_from(["phoxal-simulator"])
+                .unwrap()
+                .command
+                .is_none()
         );
     }
 
     #[test]
-    fn options_require_a_presentation_and_keep_json_probe_only() {
+    fn time_bounds_reject_zero_quantum_and_step_counter_overflow() {
         assert!(
-            parse(&[
-                "--probe",
-                "--scene",
-                "scene.xml",
-                "--bundle",
-                "bundle",
-                "--json"
-            ])
-            .is_err()
+            Bound::Duration(std::time::Duration::from_secs(1))
+                .steps(0)
+                .is_err()
         );
-        assert!(
-            parse(&[
-                "--scene",
-                "scene.xml",
-                "--bundle",
-                "bundle",
-                "--connect",
-                "unixsock-stream//tmp/test.sock",
-                "--scope",
-                "local",
-                "--supervisor-id",
-                "sim",
-                "--run-id",
-                "run",
-                "--steps",
-                "1",
-            ])
-            .is_err()
-        );
-        assert!(
-            parse(&[
-                "--scene",
-                "scene.xml",
-                "--bundle",
-                "bundle",
-                "--headless",
-                "--json",
-                "--connect",
-                "unixsock-stream//tmp/test.sock",
-                "--scope",
-                "local",
-                "--supervisor-id",
-                "sim",
-                "--run-id",
-                "run",
-                "--steps",
-                "1",
-            ])
-            .is_err()
-        );
+        assert!(Bound::Duration(std::time::Duration::MAX).steps(1).is_err());
     }
 
     #[test]
     fn duration_must_be_an_exact_quantum_multiple() {
-        assert_eq!(Bound::Duration(0.02).steps(10_000_000).unwrap(), 2);
-        assert!(Bound::Duration(0.015).steps(10_000_000).is_err());
+        assert_eq!(
+            Bound::Duration(std::time::Duration::from_millis(20))
+                .steps(10_000_000)
+                .unwrap(),
+            2
+        );
+        assert!(
+            Bound::Duration(std::time::Duration::from_millis(15))
+                .steps(10_000_000)
+                .is_err()
+        );
     }
 }
