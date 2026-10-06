@@ -3580,7 +3580,7 @@ dependencies = [
 
 [[package]]
 name = "phoxal-simulator"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "cgl",
