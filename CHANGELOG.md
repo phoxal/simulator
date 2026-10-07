@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/phoxal/simulator/compare/phoxal-simulator-v0.2.0...phoxal-simulator-v0.2.1) - 2026-10-07
+
+### Added
+
+- add paced desktop simulation and native scene interaction
+
 ## [0.2.0](https://github.com/phoxal/simulator/compare/phoxal-simulator-v0.1.3...phoxal-simulator-v0.2.0) - 2026-10-06
 
 ### Added
