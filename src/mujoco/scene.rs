@@ -84,6 +84,7 @@ pub struct StateSnapshot {
     sensor_data: Box<[f64]>,
     body_positions: Box<[[f64; 3]]>,
     body_orientations: Box<[[f64; 4]]>,
+    body_velocities: Box<[[f64; 6]]>,
     site_positions: Box<[[f64; 3]]>,
 }
 
@@ -140,6 +141,12 @@ impl StateSnapshot {
     #[must_use]
     pub fn body_orientations(&self) -> &[[f64; 4]] {
         &self.body_orientations
+    }
+
+    /// Returns body-origin velocities in world axes, ordered angular then linear.
+    #[must_use]
+    pub fn body_velocities(&self) -> &[[f64; 6]] {
+        &self.body_velocities
     }
 
     /// Returns post-forward Cartesian site positions.
@@ -217,6 +224,26 @@ impl Workspace {
     pub fn snapshot(&self) -> Result<StateSnapshot, WorkspaceError> {
         self.ensure_finite_state()?;
         let time_seconds = self.data.time();
+        let body_velocities = (0..self.model.counts().bodies)
+            .map(|body| {
+                self.data.object_velocity(
+                    crate::native_binding::prelude::MjtObj::mjOBJ_XBODY,
+                    body,
+                    false,
+                )
+            })
+            .collect::<Vec<_>>();
+        for (body, velocity) in body_velocities.iter().enumerate() {
+            for (component, value) in velocity.iter().copied().enumerate() {
+                if !value.is_finite() {
+                    return Err(WorkspaceError::NonFinite {
+                        name: "body_velocities",
+                        index: body * 6 + component,
+                        value,
+                    });
+                }
+            }
+        }
         Ok(StateSnapshot {
             model_identity: self.model.identity(),
             boundary: 0,
@@ -227,6 +254,7 @@ impl Workspace {
             sensor_data: self.data.sensordata().to_vec().into_boxed_slice(),
             body_positions: self.data.xpos().to_vec().into_boxed_slice(),
             body_orientations: self.data.xquat().to_vec().into_boxed_slice(),
+            body_velocities: body_velocities.into_boxed_slice(),
             site_positions: self.data.site_xpos().to_vec().into_boxed_slice(),
         })
     }
@@ -1046,5 +1074,38 @@ mod tests {
         );
         assert_eq!(refreshed_after.qpos(), baseline_after.qpos());
         assert_eq!(refreshed_after.qvel(), baseline_after.qvel());
+    }
+}
+
+#[cfg(test)]
+mod root_frame_tests {
+    #[test]
+    fn physical_root_matches_rigid_child_pose_and_velocity_at_rotated_state() {
+        let old = crate::mujoco::Model::from_xml(r#"<mujoco><worldbody><body name="footprint"><freejoint/><body name="base" pos="0 0 0.21"><inertial pos="0.1 0.03 0.02" mass="4" diaginertia="0.04 0.09 0.1"/><geom size="0.1"/></body></body></worldbody></mujoco>"#).unwrap();
+        let new = crate::mujoco::Model::from_xml(r#"<mujoco><worldbody><body name="base" pos="0 0 0.21"><freejoint/><inertial pos="0.1 0.03 0.02" mass="4" diaginertia="0.04 0.09 0.1"/><geom size="0.1"/></body></worldbody></mujoco>"#).unwrap();
+        let mut before = super::Workspace::new(&old).unwrap();
+        let mut after = super::Workspace::new(&new).unwrap();
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        before.set_qpos(&[1.0, 2.0, 3.0, h, h, 0.0, 0.0]).unwrap();
+        before.set_qvel(&[0.4, 0.5, 0.6, 0.0, 2.0, 0.0]).unwrap();
+        before.forward().unwrap();
+        let baseline = before.snapshot().unwrap();
+        let p = baseline.body_positions()[2];
+        let v = baseline.body_velocities()[2];
+        after.set_qpos(&[p[0], p[1], p[2], h, h, 0.0, 0.0]).unwrap();
+        after.set_qvel(&[v[3], v[4], v[5], 0.0, 2.0, 0.0]).unwrap();
+        after.forward().unwrap();
+        let updated = after.snapshot().unwrap();
+        for (actual, expected) in updated.body_positions()[1].iter().zip(p) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        for (actual, expected) in updated.body_velocities()[1].iter().zip(v) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        // R_x(90deg)*[0,0,.21]=[0,-.21,0]; world omega=[0,0,2].
+        assert!((v[3] - 0.82).abs() < 1e-12);
+        assert!((v[4] - 0.5).abs() < 1e-12);
+        assert_ne!(baseline.body_positions()[1], p);
+        assert_ne!(baseline.body_velocities()[1], v);
     }
 }
