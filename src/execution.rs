@@ -27,6 +27,7 @@ pub(super) async fn drive<T: SimulationTransport>(
     collect_every_boundary: bool,
 ) -> Result<Vec<StateSnapshot>, String> {
     let mut running = desktop.is_none() || auto_run;
+    let cancel = desktop.as_ref().map(|worker| worker.cancel.clone());
     let mut snapshots = History::new(
         collect_every_boundary || desktop.is_none(),
         run.state().clone(),
@@ -59,6 +60,12 @@ pub(super) async fn drive<T: SimulationTransport>(
         timing.resume(epoch.elapsed(), sim_time(run));
     }
     'execution: loop {
+        if desktop
+            .as_ref()
+            .is_some_and(|worker| worker.cancel.is_cancelled())
+        {
+            break;
+        }
         let stop_signal = tokio::select! {
             biased;
             _ = interrupt.recv() => true,
@@ -183,6 +190,7 @@ pub(super) async fn drive<T: SimulationTransport>(
                     .clone_from(&run.provenance().robot_bundle_identity);
             }
             state.ready = run.authority_state() == AuthorityState::Acquired;
+            state.phase = "";
             state.running = running;
             state.boundary = run.boundary();
             state.generation = run.generation();
@@ -236,6 +244,7 @@ pub(super) async fn drive<T: SimulationTransport>(
             };
             tokio::select! {
                 biased;
+                _ = async { match &cancel { Some(cancel) => cancel.wait().await, None => std::future::pending().await }} => break,
                 _ = interrupt.recv() => {
                     if let Some(worker) = &desktop { worker.display.lock().map_err(|_| "desktop state lock poisoned")?.close_requested = true; }
                     break;

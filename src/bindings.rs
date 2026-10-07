@@ -271,7 +271,7 @@ pub(super) fn generated_actuation_facts(
             .as_ref()
             .ok_or("native actuator output has no compiled signature")?;
         if signature.shape != MethodShape::Observation
-            || !signature.lease_valid_for_ms.is_some_and(|lease| lease > 0)
+            || signature.lease_valid_for_ms.is_none_or(|lease| lease == 0)
             || signature.response
                 != phoxal::contracts::component::actuator::ActuatorCommand::full_name()
         {

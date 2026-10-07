@@ -1,6 +1,204 @@
 use super::*;
 use std::time::{Duration, Instant};
 
+#[test]
+fn graphics_failure_retains_the_worker_cleanup_outcome() {
+    assert_eq!(desktop_outcome(Ok(()), Ok(())), Ok(()));
+    assert_eq!(
+        desktop_outcome::<()>(Ok(()), Err("remote release unconfirmed".into())),
+        Err("remote release unconfirmed".into())
+    );
+    let graphics = desktop_outcome(Err("display unavailable".into()), Ok(())).unwrap_err();
+    assert!(graphics.contains("display unavailable"));
+    assert!(graphics.contains("headless"));
+    assert!(!graphics.contains("setup"));
+    let both = desktop_outcome::<()>(
+        Err("display unavailable".into()),
+        Err("remote release unconfirmed".into()),
+    )
+    .unwrap_err();
+    assert!(both.starts_with(&graphics));
+    assert!(both.contains("remote release unconfirmed"));
+}
+
+#[test]
+#[ignore = "requires PHOXAL_QUALIFICATION_FIXTURES with admitted build copies and MuJoCo"]
+fn native_worker_qa_readiness_cancel_and_failure_preserve_cleanup_and_diagnostics() {
+    let fixtures = std::path::PathBuf::from(
+        std::env::var_os("PHOXAL_QUALIFICATION_FIXTURES")
+            .expect("explicit qualification fixture directory"),
+    );
+    for (build, held) in [("held-build", true), ("failure-build", false)] {
+        let options = Options {
+            scene: fixtures.join("scene.xml"),
+            bundle: fixtures.join(build),
+            simulation_run: None,
+            probe: false,
+            json: false,
+            presentation: crate::config::Presentation::Desktop,
+            scope: Some("qualification".into()),
+            connect: None,
+            supervisor_id: Some("qualification".into()),
+            run_id: Some("startup-fixture".into()),
+            bound: None,
+            auto_run: false,
+        };
+        let display = Arc::new(Mutex::new(DisplayState::default()));
+        let receipt = fixtures.join("held-fixture.started");
+        if held && receipt.exists() {
+            std::fs::remove_file(&receipt).unwrap();
+        }
+        let mut owner = start_worker(options, display.clone()).unwrap();
+        if held {
+            wait(&display, |state| state.phase == "Waiting for supervisor");
+            wait(&display, |_| receipt.exists());
+            owner.cancel.cancel();
+            owner.cancel.cancel();
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !display.lock().unwrap().finished {
+            assert!(
+                Instant::now() < deadline,
+                "startup cleanup did not complete"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let outcome = owner.thread.take().unwrap().join().unwrap();
+        let state = display.lock().unwrap();
+        assert_eq!(state.boundary, 0);
+        assert!(!state.ready);
+        assert!(state.finished);
+        if held {
+            assert!(outcome.unwrap().is_none());
+            assert!(state.error.is_none());
+            assert!(!state.cleanup_failed);
+            let pid: i32 = std::fs::read_to_string(&receipt).unwrap().parse().unwrap();
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        } else {
+            let error = outcome.unwrap_err();
+            assert!(error.contains("TEST_SUPERVISOR_FAILURE"), "{error}");
+            assert!(error.contains("exited before readiness"), "{error}");
+            assert!(error.len() < 35 * 1024);
+            assert!(
+                state.cleanup_failed,
+                "nonzero shutdown is retained as an unsuccessful cleanup outcome"
+            );
+        }
+    }
+}
+
+#[test]
+fn collapsed_cleanup_failure_requires_cleanup_and_reopen_without_impossible_retry() {
+    for width in [480.0, 700.0] {
+        let context = egui::Context::default();
+        let primary =
+            "Supervisor startup failed: supervisor exited before readiness: exit status: 7";
+        let state = DisplayState {
+            error: Some(
+                format!(
+                    "{primary}\nTEST_SUPERVISOR_FAILURE\nCleanup: supervisor exited unsuccessfully"
+                )
+                .into(),
+            ),
+            cleanup_failed: true,
+            finished: true,
+            ..Default::default()
+        };
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 420.0),
+                )),
+                ..Default::default()
+            },
+            |ui| notice(ui, &state, None),
+        );
+        let text: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(text.iter().any(|line| line == primary));
+        assert!(text.iter().any(|line| line.contains("Restart is disabled")));
+        assert!(text.iter().any(|line| line.contains("before reopening")
+            && line.contains("remote authority/session cleanup")));
+        assert!(
+            !text
+                .iter()
+                .any(|line| line.contains("then retry")
+                    || line.contains("Open simulation or Restart"))
+        );
+        assert!(state.cleanup_failed);
+        assert!(
+            state
+                .error
+                .as_ref()
+                .unwrap()
+                .details
+                .contains("TEST_SUPERVISOR_FAILURE")
+        );
+        output.textures_delta.clear();
+    }
+}
+
+#[test]
+fn collapsed_notice_keeps_complete_primary_cause_visible_before_long_path_details() {
+    let reasons = [
+        "MuJoCo 3.12.0 unavailable or incompatible: MuJoCo is incompatible: found MuJoCo 3.11.0; this simulator requires MuJoCo 3.12.0.",
+        "Scene preparation failed: native model composition failed: native compile: Error: size 0 must be positive in geom; Element broken",
+    ];
+    for width in [480.0, 700.0] {
+        for reason in reasons {
+            let context = egui::Context::default();
+            let state = DisplayState {
+                error: Some(
+                    format!(
+                        "{reason}\nSelected scene: /{}scene.xml",
+                        "long path/".repeat(50)
+                    )
+                    .into(),
+                ),
+                ..Default::default()
+            };
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 420.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    notice(ui, &state, None);
+                },
+            );
+            fn text(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+                shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect()
+            }
+            let rendered = text(&output.shapes);
+            assert!(
+                rendered.iter().any(|text| text == reason),
+                "complete cause was not rendered at {width}: {rendered:?}"
+            );
+            assert!(
+                !rendered.iter().any(|text| text.contains("long path/")),
+                "collapsed details must remain separate"
+            );
+            output.textures_delta.clear();
+        }
+    }
+}
+
 /// Explicit host qualification of the real worker, supervisor and native owner.
 /// Supplies already built artifacts; this test performs no Cargo or acquisition.
 #[test]
@@ -418,7 +616,9 @@ fn desktop_layout_retains_a_dominant_unclipped_viewport() {
         let ctx = egui::Context::default();
         let (sender, _) = mpsc::channel(8);
         let mut desktop = Desktop {
+            availability: None,
             control: Arc::new(Mutex::new(Control {
+                cancel: crate::cancellation::Cancellation::default(),
                 commands: sender,
                 thread: None,
             })),
@@ -440,6 +640,7 @@ fn desktop_layout_retains_a_dominant_unclipped_viewport() {
             gesture: None,
             next_gesture: 0,
             pointer_cut: None,
+            closing: false,
             last_viewport: None,
         };
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
@@ -1004,7 +1205,9 @@ fn expanded_inspector_and_diagnostics_preserve_viewport_across_resizing() {
         let ctx = egui::Context::default();
         let (sender, _) = mpsc::channel(8);
         let mut desktop = Desktop {
+            availability: None,
             control: Arc::new(Mutex::new(Control {
+                cancel: crate::cancellation::Cancellation::default(),
                 commands: sender,
                 thread: None,
             })),
@@ -1016,6 +1219,7 @@ fn expanded_inspector_and_diagnostics_preserve_viewport_across_resizing() {
                         id,
                         name: format!("robot-rover__body_{id}__long_native_identity"),
                         mobility: BodyMobility::FreeJoint,
+                        parent: (id != 0).then_some(0),
                     })
                     .collect::<Vec<_>>()
                     .into(),
@@ -1036,12 +1240,15 @@ fn expanded_inspector_and_diagnostics_preserve_viewport_across_resizing() {
                 egui::TextureOptions::LINEAR,
             )),
             message: Some(
-                "A diagnostic remains accessible without consuming the viewport.".repeat(4),
+                "A diagnostic remains accessible without consuming the viewport."
+                    .repeat(4)
+                    .into(),
             ),
             view_camera: None,
             gesture: None,
             next_gesture: 0,
             pointer_cut: None,
+            closing: false,
             last_viewport: None,
         };
         let mut time = 0.0;
@@ -1147,6 +1354,317 @@ fn expanded_inspector_and_diagnostics_preserve_viewport_across_resizing() {
             );
             assert!(viewport.width() >= size[0] * 0.6, "{viewport:?}");
             output.textures_delta.clear();
+        }
+    }
+}
+
+#[test]
+fn scene_hierarchy_selects_only_an_explicit_free_ancestor() {
+    let bodies = vec![
+        NativeBody {
+            id: 0,
+            name: "world".into(),
+            mobility: BodyMobility::Fixed,
+            parent: None,
+        },
+        NativeBody {
+            id: 1,
+            name: "root".into(),
+            mobility: BodyMobility::FreeJoint,
+            parent: Some(0),
+        },
+        NativeBody {
+            id: 2,
+            name: "wheel".into(),
+            mobility: BodyMobility::Articulated,
+            parent: Some(1),
+        },
+        NativeBody {
+            id: 3,
+            name: "floor".into(),
+            mobility: BodyMobility::Fixed,
+            parent: Some(0),
+        },
+    ];
+    assert_eq!(free_ancestor(&bodies, 2), Some(1));
+    assert_eq!(free_ancestor(&bodies, 1), None);
+    assert_eq!(free_ancestor(&bodies, 3), None);
+    assert_eq!(free_ancestor(&bodies, 9), None);
+}
+
+#[test]
+fn collapsed_notice_projects_the_producing_phase_action() {
+    for width in [480.0, 700.0] {
+        for (primary, action) in [
+            (
+                "Build admission failed: invalid manifest",
+                "select a complete runnable robot build directory, or rebuild that robot.",
+            ),
+            (
+                "Scene preparation failed: size 0 must be positive",
+                "repair the selected scene, model resources or component model, then reopen this scene and build.",
+            ),
+            (
+                "Supervisor startup failed: child exit 7",
+                "inspect the build's supervisor and participant errors, then retry.",
+            ),
+            (
+                "Desktop graphics/window creation failed: no display",
+                "run in a working graphical desktop session, or use `phoxal-simulator run --help` for explicit headless execution.",
+            ),
+            (
+                "MuJoCo 3.12.0 unavailable or incompatible: The native library file or one of its dependencies was not found.",
+                "repair or remove PHOXAL_MUJOCO_LIBRARY=/selected/missing/library and retry. This strict override takes precedence over managed setup.",
+            ),
+            (
+                "MuJoCo 3.12.0 unavailable or incompatible: MuJoCo is incompatible: found MuJoCo 3.11.0; this simulator requires MuJoCo 3.12.0.",
+                "run phoxal-simulator --runtime-root '/tmp/runtime directory' setup, then retry. Startup never downloads a runtime.",
+            ),
+        ] {
+            let context = egui::Context::default();
+            let state = DisplayState {
+                error: Some(Notice::new(
+                    primary,
+                    action,
+                    format!(
+                        "Selected path: /{}\nNative version detail: 3011000, required 3012000",
+                        "long directory/".repeat(30)
+                    ),
+                )),
+                ..Default::default()
+            };
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 420.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| notice(ui, &state, None),
+            );
+            let text: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            for shape in &output.shapes {
+                if let egui::Shape::Text(text) = &shape.shape {
+                    assert!(
+                        text.pos.y + text.galley.size().y <= 420.0,
+                        "primary notice clipped at {width}"
+                    );
+                }
+            }
+            output.textures_delta.clear();
+            assert!(
+                text.iter().any(|line| line == &format!("Next: {action}")),
+                "{width}: {text:?}"
+            );
+            assert!(text.iter().any(|line| line == primary));
+            assert!(!text.iter().any(|line| line.contains("3011000")
+                || line.contains("3012000")
+                || line.contains("long directory/")));
+        }
+    }
+}
+
+#[test]
+fn idle_availability_owner_is_nonblocking_isolated_and_cancellable() {
+    let (entered, called) = std::sync::mpsc::channel();
+    let (release, waiting) = std::sync::mpsc::channel();
+    let mut check = AvailabilityCheck::spawn(move |_| {
+        entered.send(()).unwrap();
+        waiting.recv().unwrap();
+        Err("MuJoCo unavailable\nNext: repair the selected library.".into())
+    })
+    .unwrap();
+    called
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    assert!(check.result.lock().unwrap().is_none());
+    let state = DisplayState {
+        ready: true,
+        cleanup_failed: true,
+        generation: 42,
+        ..Default::default()
+    };
+    let result = check.result.clone();
+    release.send(()).unwrap();
+    check.thread.take().unwrap().join().unwrap();
+    assert!(result.lock().unwrap().as_ref().unwrap().is_err());
+    assert!(state.ready && state.cleanup_failed);
+    assert_eq!(state.generation, 42);
+
+    let (entered, called) = std::sync::mpsc::channel();
+    let check = AvailabilityCheck::spawn(move |cancel| {
+        entered.send(()).unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(cancel.wait());
+        cancel.check().map_err(Notice::from)
+    })
+    .unwrap();
+    called
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let result = check.result.clone();
+    check.finish().unwrap();
+    assert!(
+        result.lock().unwrap().is_none(),
+        "cancelled availability never publishes a failure"
+    );
+}
+
+#[test]
+fn late_idle_availability_cannot_replace_execution_notice_or_cleanup_fence() {
+    let context = egui::Context::default();
+    let (commands, _) = mpsc::channel(1);
+    let display = Arc::new(Mutex::new(DisplayState {
+        finished: true,
+        cleanup_failed: true,
+        generation: 42,
+        error: Some("Supervisor startup failed: exit 7\nNext: inspect the supervisor.".into()),
+        ..Default::default()
+    }));
+    let mut desktop = Desktop {
+        availability: Some(Arc::new(Mutex::new(Some(Err(
+            "LATE IDLE FAILURE\nNext: repair native library.".into(),
+        ))))),
+        control: Arc::new(Mutex::new(Control {
+            commands,
+            cancel: crate::cancellation::Cancellation::default(),
+            thread: None,
+        })),
+        display: display.clone(),
+        options: Some(Options {
+            simulation_run: None,
+            probe: false,
+            scene: "scene.xml".into(),
+            bundle: "build".into(),
+            json: false,
+            presentation: crate::config::Presentation::Desktop,
+            scope: None,
+            connect: None,
+            supervisor_id: None,
+            run_id: None,
+            bound: None,
+            auto_run: true,
+        }),
+        build_path: "build".into(),
+        scene_path: "scene.xml".into(),
+        restart: 0,
+        texture: None,
+        message: None,
+        view_camera: None,
+        gesture: None,
+        next_gesture: 0,
+        pointer_cut: None,
+        closing: false,
+        last_viewport: None,
+    };
+    let mut output = context.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(700.0, 552.0),
+            )),
+            ..Default::default()
+        },
+        |ui| desktop.draw(ui),
+    );
+    let text: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    output.textures_delta.clear();
+    assert!(
+        text.iter()
+            .any(|line| line.contains("Supervisor startup failed: exit 7")),
+        "{text:?}"
+    );
+    assert!(
+        !text.iter().any(
+            |line| line.contains("LATE IDLE FAILURE") || line.contains("repair native library")
+        )
+    );
+    let state = display.lock().unwrap();
+    assert!(state.finished && state.cleanup_failed);
+    assert_eq!(state.generation, 42);
+    assert!(state.error.as_ref().unwrap().details.contains("exit 7"));
+}
+
+#[test]
+fn secondary_next_text_cannot_replace_primary_recovery() {
+    let native_action = "repair or remove PHOXAL_MUJOCO_LIBRARY=/selected/missing\nNext: SECONDARY_PATH_TEXT and retry. This strict override takes precedence over managed setup.";
+    let native = Notice::new(
+        "MuJoCo unavailable: file not found",
+        native_action,
+        "Candidates:\nlibrary discovery at /selected/missing\nNext: SECONDARY_PATH_TEXT: dlopen failed",
+    );
+    let graphics = graphics_notice(
+        "display unavailable".into(),
+        Some("Build failed\nNext: SECONDARY_BUILD_ACTION".into()),
+    );
+    assert_eq!(
+        desktop_outcome::<()>(
+            Err("display unavailable".into()),
+            Err("Build failed\nNext: SECONDARY_BUILD_ACTION".into())
+        )
+        .unwrap_err(),
+        graphics.to_string()
+    );
+    let child = Notice::new(
+        "Supervisor startup failed: exit 7",
+        "inspect the supervisor and participants.",
+        "Child stderr:\nNext: SECONDARY_CHILD_ACTION\nAdditional cleanup details:\nNext: SECONDARY_CLEANUP_ACTION",
+    );
+    for width in [480.0, 700.0] {
+        for failure in [&native, &graphics, &child] {
+            let context = egui::Context::default();
+            let state = DisplayState {
+                error: Some(failure.clone()),
+                ..Default::default()
+            };
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 420.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| notice(ui, &state, None),
+            );
+            let text: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            output.textures_delta.clear();
+            assert!(
+                text.iter()
+                    .any(|line| line == &format!("Next: {}", failure.action)),
+                "{width}: {text:?}"
+            );
+            assert!(
+                !text
+                    .iter()
+                    .any(|line| line == "Next: SECONDARY_BUILD_ACTION"
+                        || line == "Next: SECONDARY_PATH_TEXT: dlopen failed"
+                        || line == "Next: SECONDARY_CHILD_ACTION")
+            );
         }
     }
 }

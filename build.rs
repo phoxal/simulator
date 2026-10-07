@@ -4,6 +4,9 @@ use quote::quote;
 use syn::{ForeignItem, Item, Pat};
 
 fn main() {
+    // The retained upstream ABI has optional viewer annotations. This package
+    // never enables that upstream feature, but Rust's cfg validator must know it.
+    println!("cargo:rustc-check-cfg=cfg(feature, values(\"viewer\"))");
     let input = "src/native_binding/upstream_ffi.rs";
     println!("cargo:rerun-if-changed={input}");
     let source = std::fs::read_to_string(input).expect("packaged ABI declarations");

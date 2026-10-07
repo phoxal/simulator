@@ -13,11 +13,26 @@ cargo install cargo-phoxal
 phoxal-simulator --help
 ```
 
-Installation, help, version, and scene-resource staging do not require MuJoCo.
+Installation, help, version, setup, and scene-resource staging do not require an existing MuJoCo library.
 The executable dynamically loads MuJoCo only for native operations.
-No native library is downloaded, installed, or bundled.
+Ordinary starts never download or install a native library.
 
-Native simulation requires a user-managed MuJoCo **3.12.0** shared library and a working graphics environment for desktop rendering.
+Native simulation requires a MuJoCo **3.12.0** shared library and a working graphics environment for desktop rendering.
+Explicit setup downloads the pinned official prebuilt archive, verifies its checksum, validates bounded extraction and the complete native API, and atomically installs it under `~/.phoxal/simulator/mujoco/3.12.0/<target>` with licenses and provenance.
+Run setup in a terminal:
+
+```sh
+phoxal-simulator setup
+```
+
+The setup command in this checkout is not available in the published 0.2.2 executable.
+Until this change is delivered, build this checkout with `cargo build --locked` and use `target/debug/phoxal-simulator` for these setup commands.
+Use `--runtime-root '/chosen/runtime directory'` on setup and subsequent commands to select the same isolated installation root.
+Setup is cancellable, serialized across concurrent installers, reuses a verified install offline, and preserves a valid installation when a replacement fails.
+Unconfirmed image-tool or mount cleanup is reported as a failure and retains the owned temporary directory for diagnosis.
+There is no graphical installer or mandatory setup prompt.
+The desktop can copy the exact contextual terminal command and retry after explicit setup.
+Primary recovery actions are supplied separately by the failing phase, so paths, child stderr and secondary cleanup details cannot replace them.
 The simulator checks the native version before accessing engine layouts or launching the supervisor.
 Unsupported versions and missing libraries produce simulator-owned errors.
 Set an explicit library file when it is outside the supported system locations:
@@ -27,11 +42,13 @@ export PHOXAL_MUJOCO_LIBRARY=/path/to/libmujoco.3.12.0.dylib
 ```
 
 Linux libraries normally use `libmujoco.so.3.12.0`.
-Discovery also tries the platform library search path, `/usr/local/lib`, the macOS Homebrew `/opt/homebrew/lib` directory, the system MuJoCo framework, and the framework inside `/Applications/MuJoCo.app` or `/Applications/MuJoCoStudio.app`.
+Without an explicit override, discovery first validates the managed installation, then tries bounded platform search candidates, `/usr/local/lib`, the macOS Homebrew `/opt/homebrew/lib` directory, the system MuJoCo framework, and the framework inside `/Applications/MuJoCo.app` or `/Applications/MuJoCoStudio.app`.
+An absent, incompatible or incomplete automatic candidate does not prevent trying the next candidate.
 For an app installed elsewhere or a mounted DMG, set `PHOXAL_MUJOCO_LIBRARY` to its actual library file.
 An explicit path takes precedence and is never silently replaced with another library.
 The internal binding adaptation retains the upstream licenses and generates typed runtime symbol dispatch from the original ABI declaration.
 The library stays loaded for all engine objects and their destruction.
+Only successful complete admission is cached, so repairing a failed candidate can be retried in the same process.
 
 ## Open and run
 
@@ -39,9 +56,18 @@ The library stays loaded for all engine objects and their destruction.
 phoxal-simulator
 ```
 
-This checks the user-managed MuJoCo prerequisite and opens an idle desktop window.
+This opens an idle desktop window even when MuJoCo is absent.
+A separately owned background availability check reports a concise native cause and the contextual repair action to the terminal and idle window without blocking window creation.
+The check never downloads, prepares a robot or starts children, and its result cannot change an opened execution or its cleanup fence.
+Window shutdown cancels and joins the checker; failed admission remains retryable after repair through Open simulation.
 No supervisor or participants start until a build directory and an explicit scene are selected.
 Help and version remain native-library-free.
+The macOS bare-startup diagnostic test needs an actual graphical session and uses bounded signal cleanup, so it is explicit host qualification rather than CI or GUI-close acceptance:
+
+```sh
+cargo test --test runtime_loading bare_idle_reports_missing_runtime_without_preparation_or_children -- --ignored --exact
+```
+
 
 From robot-rover, the separate source-development command prepares and launches the robot:
 
@@ -57,7 +83,10 @@ Use `--paused` for paused startup and `--duration 10s` for an explicit time boun
 - **Step** advances one native boundary while paused.
 - **Reset** resets the current execution while paused, including runtime reset and source-state handling.
 - **Stop** releases native authority and shuts down the supervisor and participants.
-- **Restart** becomes available after shutdown and starts a fresh execution from the same prepared scene.
+- **Cancel startup** latches cancellation independently of the command queue.
+- **Stopping** remains visible while remote authority/session and owned process/diagnostic cleanup completes.
+- **Restart** becomes available after confirmed cleanup and starts a fresh execution from the same prepared scene.
+- Unconfirmed cleanup retains the cause and disables restart rather than claiming that all remote authority and processes are gone.
 - Closing the window stops and joins the current execution.
 
 The native viewport occupies the main area, with a compact robot/status/time header.
@@ -81,6 +110,7 @@ MuJoCo converts the body-local angular DOFs into copied world-axis boundary evid
 A drag starting on a visible descendant of an explicitly selected ancestor moves that named ancestor; otherwise it selects the actual picked body.
 To reposition rover's free root, select base_link in Scene before grabbing its visible chassis or wheels.
 The tool never silently promotes a selected attached child to a free ancestor.
+For an attached child, **Select movable ancestor** explicitly selects its nearest native ancestor with its own free joint.
 While running, translation uses MuJoCo spring/damping perturbation force and its native moment-arm torque at normal integration boundaries, without assigning qpos.
 While paused, only the selected body's own free joint is eligible, and active native weld/connect constraints on its subtree refuse the pose edit.
 Paused translation resets that free joint's six velocity DOFs, preserves orientation and other joint/body velocities, forwards native state and refreshes the authoritative snapshot without advancing time.
