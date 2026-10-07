@@ -119,3 +119,28 @@ fn cameras_with_different_resolutions_share_a_workspace_without_stale_pixels() {
         }
     }
 }
+
+#[test]
+fn native_root_body_highlights_descendants_without_changing_materials() {
+    let model = Model::from_xml(r#"<mujoco><visual><global offwidth="64" offheight="48"/></visual>
+        <worldbody><body name="root"><freejoint/><body name="child"><geom type="sphere" size="0.4" rgba="0.2 0.4 0.8 1"/></body></body></worldbody></mujoco>"#).unwrap();
+    let mut workspace = Workspace::new(&model).unwrap();
+    let view = crate::mujoco::ViewCamera {
+        look_at: [0.0; 3],
+        distance: 3.0,
+        azimuth: 90.0,
+        elevation: 0.0,
+    };
+    let state = workspace.snapshot().unwrap();
+    // Compare warm native readbacks. The first pass differs slightly even
+    // between two unselected renders on this driver, independently of highlight.
+    workspace.render_viewport(view, [64, 48]).unwrap();
+    let ordinary = workspace.render_viewport(view, [64, 48]).unwrap();
+    let selected = workspace
+        .render_viewport_selected(view, [64, 48], Some(1))
+        .unwrap();
+    assert_ne!(ordinary.rgb(), selected.rgb());
+    assert_eq!(state, workspace.snapshot().unwrap());
+    let restored = workspace.render_viewport(view, [64, 48]).unwrap();
+    assert_eq!(ordinary, restored);
+}

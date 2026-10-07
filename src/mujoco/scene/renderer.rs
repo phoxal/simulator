@@ -102,6 +102,64 @@ impl CameraRenderer {
         Ok(())
     }
 
+    pub(super) fn select<M: ModelType>(
+        &self,
+        data: &mut MjData<M>,
+        xy: [f64; 2],
+    ) -> crate::native_binding::wrappers::mj_visualization::SceneSelection {
+        self.scene.find_selection(
+            data,
+            &MjvOption::default(),
+            self.width as f64 / self.height as f64,
+            xy[0],
+            xy[1],
+        )
+    }
+
+    pub(super) fn highlight(
+        &mut self,
+        model: &MjModel,
+        body: usize,
+    ) -> Vec<(usize, [f32; 4], f32)> {
+        let mut originals = Vec::new();
+        // SAFETY: only color/emission in the bounded, renderer-owned abstract geom
+        // buffer is changed. No pointers, lengths, model materials or physics change.
+        for (index, geom) in unsafe { self.scene.geoms_mut() }.iter_mut().enumerate() {
+            let Some(owner) = (geom.objtype
+                == crate::native_binding::prelude::MjtObj::mjOBJ_GEOM as i32
+                && geom.objid >= 0)
+                .then(|| model.geom_bodyid().get(geom.objid as usize).copied())
+                .flatten()
+            else {
+                continue;
+            };
+            let mut ancestor = owner as usize;
+            if body != 0 {
+                while ancestor != body && ancestor != 0 {
+                    ancestor = model.body_parentid()[ancestor] as usize;
+                }
+            }
+            if ancestor == body {
+                originals.push((index, geom.rgba, geom.emission));
+                for (channel, accent) in geom.rgba[..3].iter_mut().zip([0.95, 0.67, 0.22]) {
+                    *channel = 0.7 * *channel + 0.3 * accent;
+                }
+                geom.emission = geom.emission.max(0.03);
+            }
+        }
+        originals
+    }
+
+    pub(super) fn restore_highlight(&mut self, originals: Vec<(usize, [f32; 4], f32)>) {
+        // SAFETY: render does not resize or rebuild the native scene. These indices
+        // came from this same bounded geom buffer immediately before that render.
+        let geoms = unsafe { self.scene.geoms_mut() };
+        for (index, rgba, emission) in originals {
+            geoms[index].rgba = rgba;
+            geoms[index].emission = emission;
+        }
+    }
+
     pub(super) fn render(&mut self) -> Result<(), String> {
         let _current = self.gl.enter()?;
         let context = self

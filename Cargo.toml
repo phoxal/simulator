@@ -31,7 +31,7 @@ bytemuck = { version = "1.25.2", features = ["min_const_generics", "must_cast"] 
 paste = "1.0.15"
 log = "0.4"
 clap = { version = "4.6.1", features = ["derive"] }
-phoxal = { version = "0.70.0", default-features = false, features = ["session", "runtime"] }
+phoxal = { version = "0.71.0", default-features = false, features = ["session", "runtime"] }
 
 prost = "0.14.4"
 

@@ -15,10 +15,19 @@ mod rendering;
 #[cfg(feature = "rendering")]
 use rendering::RendererState;
 #[cfg(feature = "rendering")]
+pub(crate) use rendering::{BodyMobility, NativeBody, NativeSelection};
+#[cfg(feature = "rendering")]
 pub use rendering::{RenderedCamera, ViewCamera};
 
 use crate::mujoco::error::{SceneError, WorkspaceError};
 use crate::mujoco::model::{Model, SiteHandle};
+
+#[cfg(feature = "rendering")]
+mod interaction;
+#[cfg(feature = "rendering")]
+use interaction::NativeDrag;
+#[cfg(feature = "rendering")]
+pub(crate) const DRAG_LIVENESS: std::time::Duration = std::time::Duration::from_millis(250);
 
 const TIME_TOLERANCE: f64 = 1.0e-9;
 
@@ -490,6 +499,8 @@ fn validate_state_values(
 /// native memory.
 pub struct Scene {
     workspace: Workspace,
+    #[cfg(feature = "rendering")]
+    drag: Option<NativeDrag>,
     observation_workspace: Workspace,
     quantum: PhysicsQuantum,
     boundary: u64,
@@ -518,6 +529,8 @@ impl Scene {
         observation_workspace.copy_observation_from(&workspace)?;
         Ok(Self {
             workspace,
+            #[cfg(feature = "rendering")]
+            drag: None,
             observation_workspace,
             quantum,
             boundary: 0,
@@ -610,6 +623,23 @@ impl Scene {
     /// its admission boundary immediately before native mutation while direct
     /// callers continue to use [`Scene::step`] or [`Scene::advance`].
     pub(crate) fn integrate_controls(&mut self, controls: &[f64]) -> Result<SceneStep, SceneError> {
+        #[cfg(feature = "rendering")]
+        if let Some(drag) = self.drag.take() {
+            if std::time::Instant::now() >= drag.deadline {
+                return self.integrate_plain(controls);
+            }
+            let result = if drag.force {
+                self.integrate_drag(controls, &drag)
+            } else {
+                self.integrate_plain(controls)
+            };
+            self.drag = Some(drag);
+            return result;
+        }
+        self.integrate_plain(controls)
+    }
+
+    fn integrate_plain(&mut self, controls: &[f64]) -> Result<SceneStep, SceneError> {
         if self.phase == ScenePhase::Failed {
             return Err(SceneError::Failed);
         }
@@ -725,6 +755,8 @@ impl Scene {
 
     /// Resets the same compiled model to boundary zero without changing model identity.
     pub fn reset(&mut self) -> Result<StateSnapshot, SceneError> {
+        #[cfg(feature = "rendering")]
+        self.drag_cancel();
         if self.phase == ScenePhase::Failed {
             return Err(SceneError::Failed);
         }
