@@ -254,9 +254,10 @@ async fn execute_remote_run(
     let joint = viewport_model
         .joint_info(joint)
         .map_err(|error| error.to_string())?;
+    let body = viewport_model.inner_arc().jnt_bodyid()[joint.handle.index()] as usize;
     let native_body = snapshots
         .iter()
-        .map(|snapshot| native_body_sample(snapshot, joint))
+        .map(|snapshot| native_body_sample(snapshot, body))
         .collect::<Result<Vec<_>, _>>()?;
     let provenance = run.provenance().clone();
     let completed_steps = run.boundary();
@@ -299,28 +300,22 @@ pub(super) struct NativeBodySample {
 
 fn native_body_sample(
     snapshot: &crate::mujoco::StateSnapshot,
-    joint: crate::mujoco::JointInfo,
+    body: usize,
 ) -> Result<NativeBodySample, String> {
-    let position_m = snapshot
-        .qpos()
-        .get(joint.qpos_offset..joint.qpos_offset + 3)
-        .and_then(|values| values.try_into().ok())
-        .ok_or_else(|| "root free joint position is outside qpos".to_owned())?;
-    let orientation_wxyz = snapshot
-        .qpos()
-        .get(joint.qpos_offset + 3..joint.qpos_offset + 7)
-        .and_then(|values| values.try_into().ok())
-        .ok_or_else(|| "root free joint orientation is outside qpos".to_owned())?;
-    let linear_velocity_mps = snapshot
-        .qvel()
-        .get(joint.dof_offset..joint.dof_offset + 3)
-        .and_then(|values| values.try_into().ok())
-        .ok_or_else(|| "root free joint linear velocity is outside qvel".to_owned())?;
-    let angular_velocity_radps = snapshot
-        .qvel()
-        .get(joint.dof_offset + 3..joint.dof_offset + 6)
-        .and_then(|values| values.try_into().ok())
-        .ok_or_else(|| "root free joint angular velocity is outside qvel".to_owned())?;
+    let position_m = *snapshot
+        .body_positions()
+        .get(body)
+        .ok_or_else(|| "root body position is outside native snapshot".to_owned())?;
+    let orientation_wxyz = *snapshot
+        .body_orientations()
+        .get(body)
+        .ok_or_else(|| "root body orientation is outside native snapshot".to_owned())?;
+    let velocity = snapshot
+        .body_velocities()
+        .get(body)
+        .ok_or_else(|| "root body velocity is outside native snapshot".to_owned())?;
+    let angular_velocity_radps = [velocity[0], velocity[1], velocity[2]];
+    let linear_velocity_mps = [velocity[3], velocity[4], velocity[5]];
     Ok(NativeBodySample {
         boundary: snapshot.boundary(),
         position_m,
@@ -366,4 +361,29 @@ pub(super) enum TerminalEvidence {
         /// Every boundary for headless/scenario evidence, otherwise only the current state.
         native_body: Vec<NativeBodySample>,
     },
+}
+
+#[cfg(test)]
+mod body_evidence_tests {
+    #[test]
+    fn native_body_origin_velocities_use_world_axes_and_not_inertial_center() {
+        let model = crate::mujoco::Model::from_xml(r#"<mujoco><worldbody><body name="root"><freejoint name="free"/><inertial pos="0.3 0.2 0.1" mass="2" diaginertia="1 1 1"/><geom size="0.1"/></body></worldbody></mujoco>"#).unwrap();
+        let mut world = crate::mujoco::Workspace::new(&model).unwrap();
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        world.set_qpos(&[1.0, 2.0, 3.0, h, h, 0.0, 0.0]).unwrap();
+        world.set_qvel(&[0.4, 0.5, 0.6, 0.0, 2.0, 0.0]).unwrap();
+        world.forward().unwrap();
+        let state = world.snapshot().unwrap();
+        let sample = super::native_body_sample(&state, 1).unwrap();
+        assert_eq!(sample.position_m, [1.0, 2.0, 3.0]);
+        for (actual, expected) in sample.angular_velocity_radps.iter().zip([0.0, 0.0, 2.0]) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        for (actual, expected) in sample.linear_velocity_mps.iter().zip([0.4, 0.5, 0.6]) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        assert_ne!(sample.angular_velocity_radps, state.qvel()[3..6]);
+        // A COM-centered query would include omega cross the nonzero inertial offset.
+        assert!((sample.linear_velocity_mps[0] - 0.4).abs() < 1e-12);
+    }
 }

@@ -65,6 +65,9 @@ The Scene list contains native MuJoCo body names and model-local IDs, not inferr
 Selected-body details distinguish fixed bodies, a body's own free joint, and articulated/attached bodies using native model tables.
 At narrow window widths, Scene and selected-body details collapse above the viewport.
 Boundary, generation and actuator counts live in Diagnostics.
+Robot body evidence records the root free body's physical origin and world quaternion [w, x, y, z].
+Both velocity vectors use world axes, with linear velocity at the body origin rather than its inertial center.
+MuJoCo converts the body-local angular DOFs into copied world-axis boundary evidence.
 
 - **Click** selects a native surface; a miss clears selection.
 - **Right drag** or macOS secondary click-and-drag orbits the camera.
@@ -76,7 +79,7 @@ Boundary, generation and actuator counts live in Diagnostics.
 
 **Primary drag** grabs the selected native body, with an acknowledged drag status and the selected identity in the inspector.
 A drag starting on a visible descendant of an explicitly selected ancestor moves that named ancestor; otherwise it selects the actual picked body.
-To reposition rover's free root, select base_footprint in Scene before grabbing its visible chassis or wheels.
+To reposition rover's free root, select base_link in Scene before grabbing its visible chassis or wheels.
 The tool never silently promotes a selected attached child to a free ancestor.
 While running, translation uses MuJoCo spring/damping perturbation force and its native moment-arm torque at normal integration boundaries, without assigning qpos.
 While paused, only the selected body's own free joint is eligible, and active native weld/connect constraints on its subtree refuse the pose edit.
