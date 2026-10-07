@@ -424,7 +424,10 @@ impl Model {
             .get(address..end)
             .ok_or_else(|| invalid_metadata("text range", index))?;
         let text = CStr::from_bytes_until_nul(
-            &values.iter().map(|value| *value as u8).collect::<Vec<_>>(),
+            &values
+                .iter()
+                .map(|value| value.to_ne_bytes()[0])
+                .collect::<Vec<_>>(),
         )
         .map_err(|_| invalid_metadata("text terminator", index))?
         .to_str()

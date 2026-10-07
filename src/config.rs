@@ -38,12 +38,17 @@ pub(super) struct Options {
     about = "Open or run a Phoxal simulation"
 )]
 pub(super) struct Cli {
+    /// Simulator-owned runtime directory (default: ~/.phoxal/simulator).
+    #[arg(long, global = true)]
+    pub(super) runtime_root: Option<PathBuf>,
     #[command(subcommand)]
     pub(super) command: Option<AppCommand>,
 }
 
 #[derive(Debug, clap::Subcommand)]
 pub(super) enum AppCommand {
+    /// Explicitly install and verify the supported prebuilt MuJoCo runtime.
+    Setup,
     /// Run an existing robot build with an explicitly selected scene.
     Run(RunArgs),
     /// Inspect native model facts for robot preparation without launching participants.

@@ -659,6 +659,13 @@ pub enum RemoteSceneError<TE: fmt::Display, PE> {
     Fencing(String),
     /// A required provenance fact was not available.
     Provenance(ProvenanceError),
+    /// Acquisition reached the transport but its remote result is unconfirmed.
+    AcquisitionUnconfirmed(AuthorityClientError<TE>),
+    /// Initialization failed after a grant and remote release did not succeed.
+    CleanupUnconfirmed {
+        primary: Box<Self>,
+        cleanup: AuthorityClientError<TE>,
+    },
 }
 
 #[cfg(feature = "native")]
@@ -672,6 +679,13 @@ impl<TE: fmt::Display, PE: fmt::Display> fmt::Display for RemoteSceneError<TE, P
                 write!(formatter, "simulation boundary fencing failed: {detail}")
             }
             Self::Provenance(error) => error.fmt(formatter),
+            Self::AcquisitionUnconfirmed(error) => {
+                write!(formatter, "authority acquisition unconfirmed: {error}")
+            }
+            Self::CleanupUnconfirmed { primary, cleanup } => write!(
+                formatter,
+                "{primary}; native authority cleanup unconfirmed: {cleanup}"
+            ),
         }
     }
 }
@@ -752,52 +766,73 @@ where
             provider.providers().clone(),
         )
         .map_err(RemoteSceneError::Authority)?;
-        authority
-            .acquire()
-            .await
-            .map_err(RemoteSceneError::Authority)?;
-        if authority.boundary() != 0 {
-            authority.mark_application_lost();
-            return Err(RemoteSceneError::Fencing(
-                "authority was acquired above native boundary zero".to_owned(),
-            ));
+        if let Err(error) = authority.acquire().await {
+            return Err(match error {
+                AuthorityClientError::Transport(_)
+                | AuthorityClientError::Protocol(_)
+                | AuthorityClientError::UncertainPhase { .. } => {
+                    RemoteSceneError::AcquisitionUnconfirmed(error)
+                }
+                _ => RemoteSceneError::Authority(error),
+            });
         }
-        let state = match scene.snapshot() {
-            Ok(state) => state,
-            Err(error) => {
-                authority.mark_application_lost();
-                return Err(RemoteSceneError::Native(error));
-            }
-        };
-        let timeline_id = match authority.timeline_id() {
-            Some(timeline_id) => timeline_id.to_owned(),
-            None => {
-                authority.mark_application_lost();
+        let initialized = async {
+            if authority.boundary() != 0 {
                 return Err(RemoteSceneError::Fencing(
-                    "authority was acquired without a timeline identity".to_owned(),
+                    "authority was acquired above native boundary zero".to_owned(),
                 ));
             }
-        };
-        let provenance = match SimulationProvenance::from_input(
-            provenance,
-            scene.model(),
-            quantum_ns,
-            authority.execution_id(),
-            &timeline_id,
-        ) {
-            Ok(provenance) => provenance,
-            Err(error) => {
-                authority.mark_application_lost();
-                return Err(RemoteSceneError::Provenance(error));
+            let state = match scene.snapshot() {
+                Ok(state) => state,
+                Err(error) => {
+                    return Err(RemoteSceneError::Native(error));
+                }
+            };
+            let timeline_id = match authority.timeline_id() {
+                Some(timeline_id) => timeline_id.to_owned(),
+                None => {
+                    return Err(RemoteSceneError::Fencing(
+                        "authority was acquired without a timeline identity".to_owned(),
+                    ));
+                }
+            };
+            let provenance = match SimulationProvenance::from_input(
+                provenance,
+                scene.model(),
+                quantum_ns,
+                authority.execution_id(),
+                &timeline_id,
+            ) {
+                Ok(provenance) => provenance,
+                Err(error) => {
+                    return Err(RemoteSceneError::Provenance(error));
+                }
+            };
+            let observations = provider
+                .observations(scene.model(), &state, quantum_ns)
+                .map_err(RemoteSceneError::Provider)?;
+            authority
+                .admit_initial(observations)
+                .await
+                .map_err(RemoteSceneError::Authority)?;
+            Ok((state, provenance))
+        }
+        .await;
+        let (state, provenance) = match initialized {
+            Ok(initialized) => initialized,
+            Err(primary) => {
+                return Err(match authority.release().await {
+                    Ok(_) => primary,
+                    Err(cleanup) => {
+                        authority.mark_application_lost();
+                        RemoteSceneError::CleanupUnconfirmed {
+                            primary: Box::new(primary),
+                            cleanup,
+                        }
+                    }
+                });
             }
         };
-        let observations = provider
-            .observations(scene.model(), &state, quantum_ns)
-            .map_err(RemoteSceneError::Provider)?;
-        authority
-            .admit_initial(observations)
-            .await
-            .map_err(RemoteSceneError::Authority)?;
         let generation = authority.generation();
         Ok(Self {
             scene,

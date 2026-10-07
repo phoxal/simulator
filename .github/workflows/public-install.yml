@@ -44,8 +44,8 @@ jobs:
           cat dependencies
           if grep -q 'libmujoco' dependencies; then exit 1; fi
           set +e
-          phoxal-simulator run --scene /missing/scene --bundle /missing/bundle --headless --steps 1 > native-output 2> native-error
+          phoxal-simulator run /missing/scene --build /missing/bundle --headless --steps 1 > native-output 2> native-error
           status=$?
           set -e
           test "$status" = 1
-          grep 'MuJoCo 3.12.0 is not available' native-error
+          grep 'MuJoCo 3.12.0 unavailable or incompatible' native-error

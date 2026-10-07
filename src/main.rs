@@ -10,6 +10,7 @@ mod authority;
 mod bindings;
 mod bundle;
 mod cadence;
+mod cancellation;
 mod composition;
 mod config;
 mod desktop;
@@ -17,22 +18,30 @@ mod execution;
 mod georeference;
 pub mod mujoco;
 mod native_provider;
+mod notice;
 mod observations;
+mod process_output;
 mod remote;
 mod runtime;
+mod setup;
 
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     use clap::Parser as _;
     let cli = config::Cli::parse();
+    if let Err(error) = setup::configure_root(cli.runtime_root) {
+        eprintln!("phoxal-simulator: {error}");
+        return ExitCode::FAILURE;
+    }
     let result = match cli.command {
         Some(config::AppCommand::Run(args)) => lifecycle::run(args.into_options()),
         Some(config::AppCommand::Probe(args)) => lifecycle::run(args.into_options()),
         Some(config::AppCommand::StageScene(args)) => return stage_scene(args),
-        None => native_binding::initialize()
-            .and_then(|_| desktop::idle())
-            .map(|_| ()),
+        Some(config::AppCommand::Setup) => {
+            setup::run_cli().map(|path| println!("MuJoCo 3.12.0 is ready at {}", path.display()))
+        }
+        None => desktop::idle().map(|_| ()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

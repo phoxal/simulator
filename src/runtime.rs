@@ -54,6 +54,11 @@ pub(super) async fn run(
     desktop: Option<crate::desktop::Worker>,
     prepared: PreparedNative,
 ) -> Result<Option<crate::runtime::TerminalEvidence>, String> {
+    let cancel = desktop
+        .as_ref()
+        .map(|owner| owner.cancel.clone())
+        .unwrap_or_default();
+    let display = desktop.as_ref().map(|owner| owner.display.clone());
     let PreparedNative {
         bundle,
         model,
@@ -137,14 +142,35 @@ pub(super) async fn run(
         CONTROL_PRINCIPAL.to_owned(),
     )
     .map_err(|error| error.to_string())?;
-    let connection = phoxal::session::connect(config)
-        .await
-        .map_err(|error| error.to_string())?;
-    let supervisor = match connection.supervisor(supervisor_id).await {
-        Ok(supervisor) => supervisor,
+    let connection = tokio::select! {
+        biased;
+        result = phoxal::session::connect(config) => result.map_err(|error| error.to_string())?,
+        _ = cancel.wait() => return Ok(None),
+    };
+    let selected = tokio::select! {
+        biased;
+        result = connection.supervisor(supervisor_id) => result.map(Some),
+        _ = cancel.wait() => Ok(None),
+    };
+    let supervisor = match selected {
+        Ok(None) => {
+            stopping(&display);
+            return cleanup_outcome(
+                Ok(None),
+                connection.close().await.map_err(|e| e.to_string()),
+                &display,
+                "public session",
+            );
+        }
+        Ok(Some(supervisor)) => supervisor,
         Err(error) => {
-            let _ = connection.close().await;
-            return Err(error.to_string());
+            stopping(&display);
+            return cleanup_outcome(
+                Err(error.to_string()),
+                connection.close().await.map_err(|e| e.to_string()),
+                &display,
+                "public session",
+            );
         }
     };
     let outcome = execute_remote_run(
@@ -162,15 +188,48 @@ pub(super) async fn run(
         desktop,
     )
     .await;
+    stopping(&display);
     drop(supervisor);
     let close_result = connection.close().await;
-    match (outcome, close_result) {
-        (Ok(evidence), Ok(())) => Ok(Some(evidence)),
-        (Ok(_), Err(error)) => Err(format!("public session cleanup failed: {error}")),
-        (Err(error), Ok(())) => Err(error),
-        (Err(error), Err(close_error)) => Err(format!(
-            "{error}; public session cleanup failed: {close_error}"
-        )),
+    cleanup_outcome(
+        outcome,
+        close_result.map_err(|e| e.to_string()),
+        &display,
+        "public session",
+    )
+}
+
+type Display = Option<std::sync::Arc<std::sync::Mutex<crate::desktop::DisplayState>>>;
+
+fn stopping(display: &Display) {
+    if let Some(display) = display
+        && let Ok(mut state) = display.lock()
+    {
+        state.phase = "Stopping";
+        state.stopping = true;
+    }
+}
+
+fn cleanup_outcome<T>(
+    outcome: Result<T, String>,
+    cleanup: Result<(), String>,
+    display: &Display,
+    owner: &str,
+) -> Result<T, String> {
+    match cleanup {
+        Ok(()) => outcome,
+        Err(cause) => {
+            if let Some(display) = display
+                && let Ok(mut state) = display.lock()
+            {
+                state.cleanup_failed = true;
+            }
+            let cleanup = format!("{owner} cleanup unconfirmed: {cause}");
+            Err(match outcome {
+                Ok(_) => cleanup,
+                Err(primary) => format!("{primary}; {cleanup}"),
+            })
+        }
     }
 }
 
@@ -189,7 +248,12 @@ async fn execute_remote_run(
     provider: ComponentProvider,
     request: RunRequest<'_>,
     desktop: Option<crate::desktop::Worker>,
-) -> Result<TerminalEvidence, String> {
+) -> Result<Option<TerminalEvidence>, String> {
+    let display = desktop.as_ref().map(|owner| owner.display.clone());
+    let cancel = desktop
+        .as_ref()
+        .map(|owner| owner.cancel.clone())
+        .unwrap_or_default();
     let RunRequest {
         run_id,
         requested_steps,
@@ -202,6 +266,9 @@ async fn execute_remote_run(
         .executions()
         .await
         .map_err(|error| error.to_string())?;
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
     let execution = match executions.as_slice() {
         [execution] => execution,
         [] => return Err("supervisor advertised no execution".to_owned()),
@@ -221,72 +288,113 @@ async fn execute_remote_run(
     let provenance = ProvenanceInput::new(robot_bundle_identity, run_id.to_owned())
         .map_err(|error| error.to_string())?;
     let native_bindings = provider.binding_evidence();
-    let mut run = RemoteSceneRun::acquire(
+    let acquired = RemoteSceneRun::acquire(
         scene,
         supervisor.simulation(),
         provider,
         execution.execution_id.clone(),
         provenance,
     )
-    .await
-    .map_err(|error| error.to_string())?;
-    let snapshots = match crate::execution::drive(
-        &mut run,
-        &viewport_model,
-        requested_steps,
-        desktop,
-        auto_run,
-        collect_every_boundary,
-    )
-    .await
-    {
-        Ok(snapshots) => snapshots,
+    .await;
+    let mut run = match acquired {
+        Ok(run) => run,
         Err(error) => {
-            run.mark_application_lost();
-            return Err(error);
+            if matches!(
+                &error,
+                crate::remote::RemoteSceneError::AcquisitionUnconfirmed(_)
+                    | crate::remote::RemoteSceneError::CleanupUnconfirmed { .. }
+            ) {
+                stopping(&display);
+                if let Some(display) = &display
+                    && let Ok(mut state) = display.lock()
+                {
+                    state.cleanup_failed = true;
+                }
+            }
+            return Err(error.to_string());
         }
     };
-    let joint_name = format!("{}__base_freejoint", bundle.robot_id);
-    let joint = viewport_model
-        .joint(&joint_name)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("composed robot has no root joint `{joint_name}`"))?;
-    let joint = viewport_model
-        .joint_info(joint)
-        .map_err(|error| error.to_string())?;
-    let body = viewport_model.inner_arc().jnt_bodyid()[joint.handle.index()] as usize;
-    let native_body = snapshots
-        .iter()
-        .map(|snapshot| native_body_sample(snapshot, body))
-        .collect::<Result<Vec<_>, _>>()?;
-    let provenance = run.provenance().clone();
-    let completed_steps = run.boundary();
-    let timeline_id = run
-        .timeline_id()
-        .ok_or_else(|| "native run has no current timeline identity".to_owned())?
-        .to_owned();
-    let model_identity = run.provenance().model_identity.clone();
-    let quantum_ns = run.provenance().quantum_ns;
-    run.release().await.map_err(|error| error.to_string())?;
-    Ok(TerminalEvidence::V0 {
-        native_bindings,
-        provenance,
-        provider_contract_verified: true,
-        outcome: if completed_steps == requested_steps {
-            "success"
-        } else {
-            "stopped"
+    // Do not abandon an in-flight authority acquisition. Once acknowledged,
+    // release it explicitly before classifying cancellation as complete.
+    let outcome = async {
+        if cancel.is_cancelled() {
+            return Ok(None);
         }
-        .to_owned(),
-        completed_steps,
-        requested_steps,
-        presentation: presentation.label().to_owned(),
-        model_identity,
-        quantum_ns,
-        execution_id: execution.execution_id.clone(),
-        timeline_id,
-        native_body,
-    })
+        let snapshots = match crate::execution::drive(
+            &mut run,
+            &viewport_model,
+            requested_steps,
+            desktop,
+            auto_run,
+            collect_every_boundary,
+        )
+        .await
+        {
+            Ok(snapshots) => snapshots,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+        if let Some(display) = &display
+            && let Ok(mut state) = display.lock()
+        {
+            state.phase = "Stopping";
+            state.stopping = true;
+        }
+        let joint_name = format!("{}__base_freejoint", bundle.robot_id);
+        let joint = viewport_model
+            .joint(&joint_name)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("composed robot has no root joint `{joint_name}`"))?;
+        let joint = viewport_model
+            .joint_info(joint)
+            .map_err(|error| error.to_string())?;
+        let body = viewport_model.inner_arc().jnt_bodyid()[joint.handle.index()] as usize;
+        let native_body = snapshots
+            .iter()
+            .map(|snapshot| native_body_sample(snapshot, body))
+            .collect::<Result<Vec<_>, _>>()?;
+        let provenance = run.provenance().clone();
+        let completed_steps = run.boundary();
+        let timeline_id = run
+            .timeline_id()
+            .ok_or_else(|| "native run has no current timeline identity".to_owned())?
+            .to_owned();
+        let model_identity = run.provenance().model_identity.clone();
+        let quantum_ns = run.provenance().quantum_ns;
+        Ok(Some(TerminalEvidence::V0 {
+            native_bindings,
+            provenance,
+            provider_contract_verified: true,
+            outcome: if completed_steps == requested_steps {
+                "success"
+            } else {
+                "stopped"
+            }
+            .to_owned(),
+            completed_steps,
+            requested_steps,
+            presentation: presentation.label().to_owned(),
+            model_identity,
+            quantum_ns,
+            execution_id: execution.execution_id.clone(),
+            timeline_id,
+            native_body,
+        }))
+    }
+    .await;
+    // Every path after acknowledged acquisition attempts remote release, including
+    // cancellation, drive failure and terminal evidence construction failure.
+    stopping(&display);
+    let release = run
+        .release()
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string());
+    if release.is_err() {
+        run.mark_application_lost();
+    }
+    cleanup_outcome(outcome, release, &display, "native authority")
 }
 
 #[derive(Debug, Serialize)]
@@ -365,6 +473,43 @@ pub(super) enum TerminalEvidence {
 
 #[cfg(test)]
 mod body_evidence_tests {
+    #[test]
+    fn cleanup_preserves_primary_failure_and_fences_restart_even_after_cancellation() {
+        let display = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            crate::desktop::DisplayState::default(),
+        )));
+        super::stopping(&display);
+        let result = super::cleanup_outcome::<()>(
+            Err("selection refused".into()),
+            Err("transport closed".into()),
+            &display,
+            "public session",
+        );
+        assert_eq!(
+            result,
+            Err("selection refused; public session cleanup unconfirmed: transport closed".into())
+        );
+        let state = display.as_ref().unwrap().lock().unwrap();
+        assert!(state.stopping);
+        assert!(state.cleanup_failed);
+        drop(state);
+        let result = super::cleanup_outcome(
+            Ok(None::<()>),
+            Err("release identity rejected".into()),
+            &display,
+            "native authority",
+        );
+        assert_eq!(
+            result,
+            Err("native authority cleanup unconfirmed: release identity rejected".into())
+        );
+        assert!(display.as_ref().unwrap().lock().unwrap().cleanup_failed);
+        assert_eq!(
+            super::cleanup_outcome(Ok(None::<()>), Ok(()), &None, "public session"),
+            Ok(None)
+        );
+    }
+
     #[test]
     fn native_body_origin_velocities_use_world_axes_and_not_inertial_center() {
         let model = crate::mujoco::Model::from_xml(r#"<mujoco><worldbody><body name="root"><freejoint name="free"/><inertial pos="0.3 0.2 0.1" mass="2" diaginertia="1 1 1"/><geom size="0.1"/></body></worldbody></mujoco>"#).unwrap();

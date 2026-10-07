@@ -72,6 +72,7 @@ pub(crate) struct NativeBody {
     pub id: usize,
     pub name: String,
     pub mobility: BodyMobility,
+    pub parent: Option<usize>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NativeSelection {
@@ -208,7 +209,12 @@ impl Workspace {
                 } else {
                     BodyMobility::Articulated
                 };
-                NativeBody { id, name, mobility }
+                NativeBody {
+                    id,
+                    name,
+                    mobility,
+                    parent: (id != 0).then(|| model.body_parentid()[id] as usize),
+                }
             })
             .collect()
     }

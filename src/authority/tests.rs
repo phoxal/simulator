@@ -8,7 +8,10 @@ struct Peer(Arc<Mutex<PeerState>>);
 #[derive(Default)]
 struct PeerState {
     acquired: bool,
+    release_calls: usize,
+    fail_release: bool,
     progress_calls: usize,
+    stop_after_progress: Option<(usize, tokio::sync::mpsc::Sender<crate::desktop::Command>)>,
     stop_at: Option<(u64, tokio::sync::mpsc::Sender<crate::desktop::Command>)>,
     hardware: bool,
     boundary: u64,
@@ -170,6 +173,11 @@ impl SimulationTransport for Peer {
         Box::pin(async move {
             let mut state = self.0.lock().unwrap();
             state.progress_calls += 1;
+            if let Some((count, sender)) = &state.stop_after_progress
+                && state.progress_calls == *count
+            {
+                sender.try_send(crate::desktop::Command::Stop).unwrap();
+            }
             Ok(ProgressResponse {
                 execution_id: "execution".into(),
                 timeline_id: format!("timeline-{}", state.timeline),
@@ -210,6 +218,10 @@ impl SimulationTransport for Peer {
     ) -> SimulationFuture<'_, ReleaseAuthorityResponse, String> {
         Box::pin(async move {
             let mut state = self.0.lock().unwrap();
+            state.release_calls += 1;
+            if state.fail_release {
+                return Err("release transport failed".into());
+            }
             state.acquired = false;
             Ok(ReleaseAuthorityResponse {
                 execution_id: "execution".into(),
@@ -408,6 +420,7 @@ async fn desktop_commands_pause_step_reset_modes_and_channel_close() {
             &model,
             u64::MAX,
             Some(Worker {
+                cancel: crate::cancellation::Cancellation::default(),
                 commands,
                 display: display.clone(),
             }),
@@ -435,27 +448,28 @@ async fn desktop_commands_pause_step_reset_modes_and_channel_close() {
 
 #[tokio::test]
 async fn paused_native_coordinator_renews_watchdog_without_advancing() {
-    use crate::desktop::{Command, DisplayState, Worker};
+    use crate::desktop::{DisplayState, Worker};
     let (mut run, model, peer) = native_run().await;
     let (sender, commands) = tokio::sync::mpsc::channel(8);
     let display = Arc::new(Mutex::new(DisplayState::default()));
-    let stop = async move {
-        // This is a watchdog integration test, not a real-time tolerance assertion.
-        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-        sender.send(Command::Stop).await.unwrap();
-    };
+    // Stop on observed watchdog traffic, not a wall-time race with concurrent
+    // renderer tests. The timeout only bounds a genuinely stalled coordinator.
+    peer.0.lock().unwrap().stop_after_progress = Some((2, sender));
     let drive = crate::execution::drive(
         &mut run,
         &model,
         u64::MAX,
         Some(Worker {
+            cancel: crate::cancellation::Cancellation::default(),
             commands,
             display: display.clone(),
         }),
         false,
         false,
     );
-    let (outcome, ()) = tokio::join!(drive, stop);
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), drive)
+        .await
+        .unwrap();
     assert_eq!(outcome.unwrap().len(), 1);
     assert_eq!(run.boundary(), 0);
     assert_eq!(display.lock().unwrap().wall_seconds, 0.0);
@@ -468,7 +482,25 @@ async fn native_run() -> (
     crate::mujoco::Model,
     Peer,
 ) {
-    use crate::mujoco::{Model, Scene};
+    let (model, provider) = native_inputs();
+    let peer = Peer::default();
+    let run = RemoteSceneRun::acquire(
+        crate::mujoco::Scene::new(model.clone()).unwrap(),
+        peer.clone(),
+        provider,
+        "execution",
+        crate::remote::ProvenanceInput::new("bundle", "desktop-test").unwrap(),
+    )
+    .await
+    .unwrap();
+    (run, model, peer)
+}
+
+fn native_inputs() -> (
+    crate::mujoco::Model,
+    crate::native_provider::ComponentProvider,
+) {
+    use crate::mujoco::Model;
     use crate::native_provider::{
         ActuationDeclaration, ActuatorTarget, ComponentProvider, NativeControlMode,
         ObservationBinding,
@@ -495,17 +527,82 @@ async fn native_run() -> (
         )]),
     )
     .unwrap();
+    (model, provider)
+}
+
+struct FailedObservation(crate::native_provider::ComponentProvider);
+impl crate::remote::NativeProvider for FailedObservation {
+    type Error = String;
+    fn providers(&self) -> &ProviderSet {
+        self.0.providers()
+    }
+    fn actuation_bindings(&self) -> &[crate::remote::ActuationBinding] {
+        self.0.actuation_bindings()
+    }
+    fn observations(
+        &mut self,
+        _: &crate::mujoco::Model,
+        _: &crate::mujoco::StateSnapshot,
+        _: u64,
+    ) -> Result<Vec<Observation>, String> {
+        Err("initial sensor encoding failed".into())
+    }
+    fn controls(&mut self, _: &crate::mujoco::Model, _: &[Actuation]) -> Result<Vec<f64>, String> {
+        panic!("no controls before initial admission")
+    }
+}
+
+#[tokio::test]
+async fn post_grant_initialization_failure_releases_or_reports_uncertain_remote_cleanup() {
+    for fail_release in [false, true] {
+        let (model, provider) = native_inputs();
+        let peer = Peer::default();
+        peer.0.lock().unwrap().fail_release = fail_release;
+        let error = RemoteSceneRun::acquire(
+            crate::mujoco::Scene::new(model).unwrap(),
+            peer.clone(),
+            FailedObservation(provider),
+            "execution",
+            crate::remote::ProvenanceInput::new("bundle", "initial-failure").unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("initial sensor encoding failed"));
+        assert_eq!(
+            matches!(
+                error,
+                crate::remote::RemoteSceneError::CleanupUnconfirmed { .. }
+            ),
+            fail_release
+        );
+        let state = peer.0.lock().unwrap();
+        assert_eq!(state.release_calls, 1);
+        assert_eq!(state.acquired, fail_release);
+        assert!(state.applied.is_empty());
+    }
+    let (model, provider) = native_inputs();
     let peer = Peer::default();
-    let run = RemoteSceneRun::acquire(
-        Scene::new(model.clone()).unwrap(),
+    peer.0.lock().unwrap().lost_reply = Some(PhaseStatus::InitialAdmitted);
+    let error = RemoteSceneRun::acquire(
+        crate::mujoco::Scene::new(model).unwrap(),
         peer.clone(),
         provider,
         "execution",
-        crate::remote::ProvenanceInput::new("bundle", "desktop-test").unwrap(),
+        crate::remote::ProvenanceInput::new("bundle", "initial-admission-failure").unwrap(),
     )
     .await
-    .unwrap();
-    (run, model, peer)
+    .unwrap_err();
+    assert!(error.to_string().contains("reply lost after commit"));
+    assert!(matches!(
+        error,
+        crate::remote::RemoteSceneError::CleanupUnconfirmed { .. }
+    ));
+    let state = peer.0.lock().unwrap();
+    assert_eq!(state.applied, [PhaseStatus::InitialAdmitted]);
+    // The existing authority client fails closed on an uncertain admission;
+    // it cannot issue a valid release from that state. Never claim cleanup.
+    assert_eq!(state.release_calls, 0);
+    assert!(state.acquired);
 }
 
 #[tokio::test]
@@ -524,7 +621,11 @@ async fn long_native_desktop_run_retains_current_or_complete_evidence_explicitly
             &mut run,
             &model,
             u64::MAX,
-            Some(Worker { commands, display }),
+            Some(Worker {
+                commands,
+                display,
+                cancel: crate::cancellation::Cancellation::default(),
+            }),
             false,
             complete,
         )
