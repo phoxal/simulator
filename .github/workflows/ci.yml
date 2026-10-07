@@ -23,6 +23,7 @@ jobs:
       - run: "cargo test --locked --bin phoxal-simulator lifecycle::"
       - run: "cargo test --locked --bin phoxal-simulator config::"
       - run: "cargo test --locked --bin phoxal-simulator cadence::"
+      - run: "cargo test --locked --bin phoxal-simulator execution::"
       - run: "cargo test --locked --bin phoxal-simulator mujoco::artifact::"
       - run: "cargo test --locked --bin phoxal-simulator bundle::"
       - run: cargo clippy --locked --all-targets -- -D warnings

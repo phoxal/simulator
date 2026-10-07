@@ -363,7 +363,7 @@ pub(super) enum TerminalEvidence {
         execution_id: String,
         /// Controlled timeline identity.
         timeline_id: String,
-        /// Native root-body samples at 20 ms and terminal boundaries.
+        /// Every boundary for headless/scenario evidence, otherwise only the current state.
         native_body: Vec<NativeBodySample>,
     },
 }

@@ -59,3 +59,6 @@ mod component_models;
 #[cfg(all(test, feature = "rendering"))]
 #[path = "tests/rendering.rs"]
 mod rendering_tests;
+
+#[cfg(feature = "rendering")]
+pub(crate) use scene::{BodyMobility, DRAG_LIVENESS, NativeBody, NativeSelection};

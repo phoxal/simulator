@@ -852,6 +852,48 @@ where
         self.applied_actuation.as_ref()
     }
 
+    #[cfg(feature = "rendering")]
+    pub(crate) fn begin_drag(
+        &mut self,
+        body: usize,
+        anchor: [f64; 3],
+        camera: crate::mujoco::ViewCamera,
+        paused: bool,
+    ) -> Result<(), String> {
+        self.ensure_generation().map_err(|e| e.to_string())?;
+        if self.authority.state() != AuthorityState::Acquired {
+            return Err("native interaction requires acquired authority".into());
+        }
+        self.scene.drag_begin(body, anchor, camera, paused)
+    }
+    #[cfg(feature = "rendering")]
+    pub(crate) fn update_drag(&mut self, delta: [f64; 2], paused: bool) -> Result<(), String> {
+        self.ensure_generation().map_err(|e| e.to_string())?;
+        if self.authority.state() != AuthorityState::Acquired {
+            self.scene.drag_cancel();
+            return Err("native interaction requires acquired authority".into());
+        }
+        if let Err(error) = self.scene.drag_update(delta, paused) {
+            if self.scene.phase() == crate::mujoco::ScenePhase::Failed {
+                self.authority.mark_application_lost();
+                self.generation = self.authority.generation();
+            }
+            return Err(error);
+        }
+        if paused {
+            self.state = self.scene.snapshot().map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+    #[cfg(feature = "rendering")]
+    pub(crate) fn renew_drag(&mut self, received: std::time::Instant) {
+        self.scene.drag_renew(received);
+    }
+    #[cfg(feature = "rendering")]
+    pub(crate) fn cancel_drag(&mut self) {
+        self.scene.drag_cancel();
+    }
+
     /// Prepare robot outputs, integrate once, and acknowledge the resulting observations.
     pub async fn step(&mut self) -> Result<&StateSnapshot, RemoteSceneError<T::Error, P::Error>> {
         self.ensure_generation()?;
@@ -929,6 +971,8 @@ where
         &mut self,
     ) -> Result<ReleaseAuthorityResponse, RemoteSceneError<T::Error, P::Error>> {
         self.ensure_generation()?;
+        #[cfg(feature = "rendering")]
+        self.scene.drag_cancel();
         let response = self
             .authority
             .release()

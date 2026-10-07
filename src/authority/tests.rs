@@ -1,4 +1,5 @@
 use super::*;
+use crate::remote::RemoteSceneRun;
 use phoxal::communication::session::MethodShape;
 use std::sync::{Arc, Mutex};
 
@@ -7,6 +8,8 @@ struct Peer(Arc<Mutex<PeerState>>);
 #[derive(Default)]
 struct PeerState {
     acquired: bool,
+    progress_calls: usize,
+    stop_at: Option<(u64, tokio::sync::mpsc::Sender<crate::desktop::Command>)>,
     hardware: bool,
     boundary: u64,
     timeline: u64,
@@ -38,6 +41,12 @@ impl Peer {
         };
         state.applied.push(phase);
         state.boundary = next_boundary;
+        if phase == PhaseStatus::ObservationsAdmitted
+            && let Some((boundary, sender)) = &state.stop_at
+            && *boundary == next_boundary
+        {
+            sender.try_send(crate::desktop::Command::Stop).unwrap();
+        }
         state.receipts.push(receipt.clone());
         if state.lost_reply == Some(phase) {
             state.lost_reply = None;
@@ -159,7 +168,8 @@ impl SimulationTransport for Peer {
     }
     fn progress(&self, r: ProgressRequest) -> SimulationFuture<'_, ProgressResponse, String> {
         Box::pin(async move {
-            let state = self.0.lock().unwrap();
+            let mut state = self.0.lock().unwrap();
+            state.progress_calls += 1;
             Ok(ProgressResponse {
                 execution_id: "execution".into(),
                 timeline_id: format!("timeline-{}", state.timeline),
@@ -333,47 +343,8 @@ async fn reset_rotates_timeline_and_requires_new_initial_cut() {
 
 #[tokio::test]
 async fn lost_reply_stops_native_run_without_reintegration() {
-    use crate::mujoco::{Model, Scene};
-    use crate::{
-        native_provider::{
-            ActuationDeclaration, ActuatorTarget, ComponentProvider, NativeControlMode,
-            ObservationBinding,
-        },
-        remote::{ProvenanceInput, RemoteSceneRun},
-    };
     for lost in [PhaseStatus::Prepared, PhaseStatus::ObservationsAdmitted] {
-        let model = Model::from_xml(include_str!("../../tests/fixtures/motor.xml")).unwrap();
-        let provider = ComponentProvider::new(
-            &model,
-            providers(),
-            [ObservationBinding::ddsm115_encoder_joint(
-                "wheel",
-                "motor_joint",
-            )],
-            [ActuationDeclaration::motion(
-                "motion",
-                [ActuatorTarget::new(
-                    "motor",
-                    "motor",
-                    NativeControlMode::Velocity,
-                )],
-            )],
-            std::collections::BTreeMap::from([(
-                ("wheel".into(), "encoder".into()),
-                crate::native_provider::Cadence::new(500.0, 2_000_000).unwrap(),
-            )]),
-        )
-        .unwrap();
-        let peer = Peer::default();
-        let mut run = RemoteSceneRun::acquire(
-            Scene::new(model).unwrap(),
-            peer.clone(),
-            provider,
-            "execution",
-            ProvenanceInput::new("bundle", "run").unwrap(),
-        )
-        .await
-        .unwrap();
+        let (mut run, _, peer) = native_run().await;
         peer.0.lock().unwrap().lost_reply = Some(lost);
         assert!(run.step().await.is_err());
         assert_eq!(
@@ -407,4 +378,169 @@ async fn lost_reset_reply_fails_without_retry() {
     assert_eq!(client.state(), AuthorityState::Failed);
     assert!(client.reset().await.is_err());
     assert_eq!(peer.0.lock().unwrap().timeline, 1);
+}
+
+/// Exercise the actual boundary coordinator, typed command queue and native owner.
+#[tokio::test]
+async fn desktop_commands_pause_step_reset_modes_and_channel_close() {
+    use crate::desktop::{Command, DisplayState, Worker};
+    use crate::execution::Pacing;
+    for complete in [false, true] {
+        let (mut run, model, peer) = native_run().await;
+        let original_generation = run.generation();
+        let (sender, commands) = tokio::sync::mpsc::channel(8);
+        let display = Arc::new(Mutex::new(DisplayState::default()));
+        // Run followed by Pause must not produce a hidden boundary.
+        for command in [
+            Command::Run,
+            Command::Pause,
+            Command::SetPacing(Pacing::Fast),
+            Command::Step,
+            Command::Reset,
+            Command::Step,
+            Command::Step,
+        ] {
+            sender.try_send(command).unwrap();
+        }
+        drop(sender); // Actual window-close channel disconnection path.
+        let history = crate::execution::drive(
+            &mut run,
+            &model,
+            u64::MAX,
+            Some(Worker {
+                commands,
+                display: display.clone(),
+            }),
+            false,
+            complete,
+        )
+        .await
+        .unwrap();
+        assert_eq!(run.boundary(), 2);
+        assert_eq!(run.generation(), original_generation + 1);
+        assert_eq!(run.state().time_seconds(), 0.004);
+        assert_eq!(history.len(), if complete { 3 } else { 1 });
+        {
+            let state = display.lock().unwrap();
+            assert!(!state.running);
+            assert_eq!(state.boundary, 2);
+            assert_eq!(state.pacing, Pacing::Fast);
+            assert_eq!(state.speed, None);
+            assert!(state.wall_seconds > 0.0);
+        }
+        run.release().await.unwrap();
+        assert!(!peer.0.lock().unwrap().acquired);
+    }
+}
+
+#[tokio::test]
+async fn paused_native_coordinator_renews_watchdog_without_advancing() {
+    use crate::desktop::{Command, DisplayState, Worker};
+    let (mut run, model, peer) = native_run().await;
+    let (sender, commands) = tokio::sync::mpsc::channel(8);
+    let display = Arc::new(Mutex::new(DisplayState::default()));
+    let stop = async move {
+        // This is a watchdog integration test, not a real-time tolerance assertion.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        sender.send(Command::Stop).await.unwrap();
+    };
+    let drive = crate::execution::drive(
+        &mut run,
+        &model,
+        u64::MAX,
+        Some(Worker {
+            commands,
+            display: display.clone(),
+        }),
+        false,
+        false,
+    );
+    let (outcome, ()) = tokio::join!(drive, stop);
+    assert_eq!(outcome.unwrap().len(), 1);
+    assert_eq!(run.boundary(), 0);
+    assert_eq!(display.lock().unwrap().wall_seconds, 0.0);
+    assert!(peer.0.lock().unwrap().progress_calls >= 2);
+    run.release().await.unwrap();
+}
+
+async fn native_run() -> (
+    RemoteSceneRun<Peer, crate::native_provider::ComponentProvider>,
+    crate::mujoco::Model,
+    Peer,
+) {
+    use crate::mujoco::{Model, Scene};
+    use crate::native_provider::{
+        ActuationDeclaration, ActuatorTarget, ComponentProvider, NativeControlMode,
+        ObservationBinding,
+    };
+    let model = Model::from_xml(include_str!("../../tests/fixtures/motor.xml")).unwrap();
+    let provider = ComponentProvider::new(
+        &model,
+        providers(),
+        [ObservationBinding::ddsm115_encoder_joint(
+            "wheel",
+            "motor_joint",
+        )],
+        [ActuationDeclaration::motion(
+            "motion",
+            [ActuatorTarget::new(
+                "motor",
+                "motor",
+                NativeControlMode::Velocity,
+            )],
+        )],
+        std::collections::BTreeMap::from([(
+            ("wheel".into(), "encoder".into()),
+            crate::native_provider::Cadence::new(500.0, 2_000_000).unwrap(),
+        )]),
+    )
+    .unwrap();
+    let peer = Peer::default();
+    let run = RemoteSceneRun::acquire(
+        Scene::new(model.clone()).unwrap(),
+        peer.clone(),
+        provider,
+        "execution",
+        crate::remote::ProvenanceInput::new("bundle", "desktop-test").unwrap(),
+    )
+    .await
+    .unwrap();
+    (run, model, peer)
+}
+
+#[tokio::test]
+async fn long_native_desktop_run_retains_current_or_complete_evidence_explicitly() {
+    use crate::desktop::{Command, DisplayState, Worker};
+    for complete in [false, true] {
+        let (mut run, model, peer) = native_run().await;
+        let (sender, commands) = tokio::sync::mpsc::channel(8);
+        peer.0.lock().unwrap().stop_at = Some((10000, sender.clone()));
+        sender
+            .try_send(Command::SetPacing(crate::execution::Pacing::Fast))
+            .unwrap();
+        sender.try_send(Command::Run).unwrap();
+        let display = Arc::new(Mutex::new(DisplayState::default()));
+        let history = crate::execution::drive(
+            &mut run,
+            &model,
+            u64::MAX,
+            Some(Worker { commands, display }),
+            false,
+            complete,
+        )
+        .await
+        .unwrap();
+        assert_eq!(run.boundary(), 10000);
+        assert_eq!(history.len(), if complete { 10001 } else { 1 });
+        assert_eq!(history.last().unwrap().boundary(), 10000);
+        if complete {
+            assert!(
+                history
+                    .iter()
+                    .enumerate()
+                    .all(|(boundary, sample)| sample.boundary() == boundary as u64)
+            );
+        }
+        run.release().await.unwrap();
+    }
 }
