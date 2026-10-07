@@ -358,12 +358,13 @@ mod tests {
     fn shutdown_fixture(on_term: &str) -> Supervisor {
         let directory = tempfile::tempdir().unwrap();
         let ready = directory.path().join("ready.json");
-        let script = format!(
-            "trap '{on_term}' TERM; printf '%s' '{{\"schema\":\"phoxal/supervisor-ready/v0\",\"execution\":\"execution-1\"}}' > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; while :; do :; done"
-        );
         let child = Command::new("/bin/sh")
-            .args(["-c", &script, "fixture"])
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/process/shutdown.sh"
+            ))
             .arg(&ready)
+            .arg(on_term)
             .spawn()
             .unwrap();
         let mut supervisor = Supervisor {
@@ -430,7 +431,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let ready = directory.path().join("ready.json");
         let child = Command::new("/bin/sh")
-            .args(["-c", "exit 7"])
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/process/exit.sh"
+            ))
+            .arg("7")
             .spawn()
             .unwrap();
         let mut supervisor = Supervisor {
