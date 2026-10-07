@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/phoxal/simulator/compare/phoxal-simulator-v0.2.1...phoxal-simulator-v0.2.2) - 2026-10-07
+
+### Fixed
+
+- report root body twist in world coordinates
+
+### Other
+
+- block shutdown fixtures without busy spinning ([#12](https://github.com/phoxal/simulator/pull/12))
+
 ## [0.2.1](https://github.com/phoxal/simulator/compare/phoxal-simulator-v0.2.0...phoxal-simulator-v0.2.1) - 2026-10-07
 
 ### Added
