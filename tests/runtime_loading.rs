@@ -416,3 +416,233 @@ fn child_inventory_command_errors_are_not_absence_evidence() {
             .contains("inventory failed")
     );
 }
+
+#[test]
+fn setup_reports_and_flushes_while_lock_is_held_then_cancels() {
+    use fs2::FileExt;
+    use std::time::{Duration, Instant};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("runtime");
+    let parent = root.join("mujoco/3.12.0");
+    fs::create_dir_all(&parent).unwrap();
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(parent.join(format!(
+            "{}.lock",
+            phoxal::artifact::application::HOST_EXECUTION_TARGET
+        )))
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+    let stderr = directory.path().join("stderr");
+    let stdout = directory.path().join("stdout");
+    let child = simulator()
+        .arg("--runtime-root")
+        .arg(&root)
+        .arg("setup")
+        .stderr(fs::File::create(&stderr).unwrap())
+        .stdout(fs::File::create(&stdout).unwrap())
+        .spawn()
+        .unwrap();
+    let mut owner = OwnedChild::new(child, Duration::from_secs(2));
+    let deadline = Instant::now() + Duration::from_secs(12);
+    loop {
+        let text = fs::read_to_string(&stderr).unwrap();
+        if text.lines().any(|line| {
+            line.starts_with("Setup: Waiting for setup lock - ") && line.ends_with("s elapsed.")
+        }) {
+            assert!(
+                text.starts_with("Setup: Preparing MuJoCo 3.12.0."),
+                "{text}"
+            );
+            assert!(owner.child().try_wait().unwrap().is_none());
+            assert_eq!(fs::metadata(&stdout).unwrap().len(), 0);
+            assert!(!text.contains('\u{1b}'));
+            break;
+        }
+        assert!(Instant::now() < deadline, "no incremental output: {text}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        unsafe { libc::kill(owner.child().id() as i32, libc::SIGINT) },
+        0
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(status) = owner.child().try_wait().unwrap() {
+            assert!(!status.success());
+            break;
+        }
+        assert!(Instant::now() < deadline, "cancel did not finish");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        fs::read_to_string(stderr)
+            .unwrap()
+            .contains("Operation cancelled")
+    );
+    assert_eq!(
+        fs::read_dir(parent).unwrap().count(),
+        1,
+        "cancel published transaction"
+    );
+}
+
+#[test]
+fn setup_reports_while_proxy_connection_is_blocked_without_exposing_proxy_secrets() {
+    use std::{
+        net::TcpListener,
+        time::{Duration, Instant},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let stderr = directory.path().join("stderr");
+    let child = simulator()
+        .arg("--runtime-root")
+        .arg(directory.path().join("runtime"))
+        .arg("setup")
+        .env(
+            "HTTPS_PROXY",
+            format!("http://private-user:private-secret@{address}"),
+        )
+        .env("NO_PROXY", "")
+        .env("no_proxy", "")
+        .stderr(fs::File::create(&stderr).unwrap())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut owner = OwnedChild::new(child, Duration::from_secs(2));
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let connection = loop {
+        match listener.accept() {
+            Ok((connection, _)) => break connection,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("{error}"),
+        }
+        assert!(Instant::now() < deadline, "proxy never contacted");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    loop {
+        let text = fs::read_to_string(&stderr).unwrap();
+        if text.lines().any(|line| {
+            line.starts_with("Setup: Waiting for download data - ") && line.ends_with("s elapsed.")
+        }) {
+            assert!(owner.child().try_wait().unwrap().is_none());
+            assert!(!text.contains("private-secret"));
+            assert!(!text.contains('\u{1b}'));
+            break;
+        }
+        assert!(Instant::now() < deadline, "no network liveness: {text}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        unsafe { libc::kill(owner.child().id() as i32, libc::SIGINT) },
+        0
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(status) = owner.child().try_wait().unwrap() {
+            assert!(!status.success());
+            break;
+        }
+        assert!(Instant::now() < deadline, "network cancel did not finish");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(connection);
+    assert!(
+        fs::read_to_string(stderr)
+            .unwrap()
+            .contains("Operation cancelled")
+    );
+    assert_eq!(
+        fs::read_dir(directory.path().join("runtime/mujoco/3.12.0"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn setup_cancel_with_closed_stderr_exits_failure_without_panic_or_publication() {
+    use fs2::FileExt;
+    use std::{
+        io::Read,
+        os::fd::AsRawFd,
+        time::{Duration, Instant},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("runtime");
+    let parent = root.join("mujoco/3.12.0");
+    fs::create_dir_all(&parent).unwrap();
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(parent.join(format!(
+            "{}.lock",
+            phoxal::artifact::application::HOST_EXECUTION_TARGET
+        )))
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+    let child = simulator()
+        .arg("--runtime-root")
+        .arg(&root)
+        .arg("setup")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut owner = OwnedChild::new(child, Duration::from_secs(2));
+    let mut reader = owner.child().stderr.take().unwrap();
+    let flags = unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_GETFL) };
+    assert!(flags >= 0);
+    assert_eq!(
+        unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+        0
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut received = Vec::new();
+    loop {
+        let mut bytes = [0; 1024];
+        match reader.read(&mut bytes) {
+            Ok(0) => panic!("setup exited before waiting"),
+            Ok(count) => received.extend_from_slice(&bytes[..count]),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("{error}"),
+        }
+        if String::from_utf8_lossy(&received).contains("Setup: Waiting for setup lock.") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no flushed lock wait");
+        std::thread::park_timeout(Duration::from_millis(10));
+    }
+    drop(reader);
+    assert_eq!(
+        unsafe { libc::kill(owner.child().id() as i32, libc::SIGINT) },
+        0
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(status) = owner.child().try_wait().unwrap() {
+            assert_eq!(
+                status.code(),
+                Some(1),
+                "cancellation must not panic or succeed"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "closed stderr prevented cancellation"
+        );
+        std::thread::park_timeout(Duration::from_millis(10));
+    }
+    assert_eq!(
+        fs::read_dir(parent).unwrap().count(),
+        1,
+        "cancel published a transaction"
+    );
+}

@@ -15,6 +15,10 @@ phoxal-simulator setup
 Setup explicitly downloads the checksum-pinned official MuJoCo 3.12.0 prebuilt runtime, verifies extraction and native API admission, and installs it with licenses/provenance under `~/.phoxal/simulator`.
 Supported prebuilt targets are macOS arm64/x86_64 and GNU Linux aarch64/x86_64.
 Setup is cancellable, serialized and atomic; a verified install can be reused offline.
+Setup reports phases and measured download sizes on stderr, with a five-second per-phase heartbeat while waiting.
+Supported interactive terminals show one compact live line, with measured transfer progress when the download total is known.
+Redirected output, CI, dumb and narrow terminals use plain lines; resizing switches safely to plain feedback.
+The final readiness result stays on stdout.
 Ordinary starts never download a runtime, and there is no graphical installer.
 
 ```sh

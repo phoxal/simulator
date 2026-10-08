@@ -31,7 +31,7 @@ fn main() -> ExitCode {
     use clap::Parser as _;
     let cli = config::Cli::parse();
     if let Err(error) = setup::configure_root(cli.runtime_root) {
-        eprintln!("phoxal-simulator: {error}");
+        write_error(&error);
         return ExitCode::FAILURE;
     }
     let result = match cli.command {
@@ -47,10 +47,18 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) if error.is_empty() => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("phoxal-simulator: {error}");
+            write_error(&error);
             ExitCode::FAILURE
         }
     }
+}
+
+// Diagnostics must not turn a closed consumer into a panic or delay cancellation.
+fn write_error(error: &str) {
+    use std::io::Write as _;
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "phoxal-simulator: {error}");
+    let _ = stderr.flush();
 }
 
 /// Resource staging belongs to the simulator's existing closed-model owner.

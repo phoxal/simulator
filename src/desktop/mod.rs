@@ -1,6 +1,7 @@
 //! Desktop presentation. Only the worker owns simulation state and authority.
 
 pub(super) mod scene;
+mod theme;
 pub(super) mod viewport;
 
 #[cfg(test)]
@@ -317,7 +318,7 @@ fn open(options: Option<Options>) -> Result<Option<crate::runtime::TerminalEvide
         "Phoxal Simulator",
         native_options,
         Box::new(move |cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            theme::apply(&cc.egui_ctx);
             Ok(Box::new(Desktop {
                 control,
                 display,
@@ -455,6 +456,7 @@ impl Desktop {
         } else {
             None
         };
+        let pin_notice = state.finished || state.error.is_some();
         if ui.ctx().input(|input| input.viewport().close_requested()) && !state.finished {
             self.closing = true;
             ui.ctx()
@@ -505,12 +507,11 @@ impl Desktop {
             }
         }
         egui::Frame::new()
-            .fill(egui::Color32::from_rgb(18, 22, 29))
+            .fill(theme::SURFACE)
             .inner_margin(12)
             .show(ui, |ui| {
                 ui.style_mut().spacing.item_spacing = egui::vec2(8.0, 8.0);
                 ui.style_mut().spacing.button_padding = egui::vec2(10.0, 6.0);
-                ui.visuals_mut().override_text_color = Some(egui::Color32::from_rgb(225, 232, 241));
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new("Phoxal Simulator").size(18.0).strong());
                     if !state.robot_name.is_empty() { ui.label(&state.robot_name); }
@@ -534,17 +535,24 @@ impl Desktop {
                     } else {
                         "Paused"
                     };
-                    ui.label(egui::RichText::new(status).color(if state.error.is_some() {
-                        egui::Color32::LIGHT_RED
+                    ui.label(egui::RichText::new(status).color(if state.error.is_some() || state.cleanup_failed {
+                        theme::ERROR
                     } else {
-                        egui::Color32::from_rgb(96, 215, 182)
+                        if state.stopping { theme::WARNING }
+                        else if state.ready && state.running { theme::SUCCESS }
+                        else { theme::MUTED }
                     }));
                 });
+                if pin_notice {
+                    notice_primary(ui, &state, self.message.as_ref().or(availability_error.as_ref()));
+                }
                 if state.finished && !state.cleanup_failed {
+                    let height = (ui.available_height() * 0.45).max(1.0);
+                    egui::ScrollArea::vertical().id_salt("idle_inputs").max_height(height).show(ui, |ui| {
                     ui.add_space(16.0);
                     ui.label("Robot build directory");
                     ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.build_path).desired_width((ui.available_width()-90.0).max(80.0)));
+                        path_input(ui, &mut self.build_path);
                         if ui.button("Browse…").clicked()
                             && let Some(path) = rfd::FileDialog::new().set_title("Choose runnable robot build directory").pick_folder() {
                             self.build_path = path.display().to_string();
@@ -552,7 +560,7 @@ impl Desktop {
                     });
                     ui.label("Scene file");
                     ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.scene_path).desired_width((ui.available_width()-90.0).max(80.0)));
+                        path_input(ui, &mut self.scene_path);
                         if ui.button("Browse…").clicked()
                             && let Some(path) = rfd::FileDialog::new().set_title("Choose simulation scene").add_filter("MuJoCo scene", &["xml", "mjz"]).pick_file() {
                             self.scene_path = path.display().to_string();
@@ -585,6 +593,7 @@ impl Desktop {
                         })();
                         self.message = result.err();
                     }
+                    });
                 }
                 ui.add_space(12.0);
                 ui.horizontal_wrapped(|ui| {
@@ -603,12 +612,14 @@ impl Desktop {
                             }
                             if ui
                                 .add_enabled(!state.running, egui::Button::new("Step"))
+                                .on_disabled_hover_text("Available after startup; pause before stepping.")
                                 .clicked()
                             {
                                 self.send(Command::Step);
                             }
                             if ui
                                 .add_enabled(!state.running, egui::Button::new("Reset"))
+                                .on_disabled_hover_text("Available after startup; pause before resetting.")
                                 .clicked()
                             {
                                 self.send(Command::Reset);
@@ -684,7 +695,8 @@ impl Desktop {
                             diagnostics(ui, &state, self.message.as_ref().map(|notice|notice.details.as_str()), self.pointer_cut);
                             egui::CollapsingHeader::new("Scene and selected body")
                                 .show(ui, |ui| { inspector(ui, &mut state, 140.0); });
-                            notice(ui, &state, self.message.as_ref().or(availability_error.as_ref()));
+                            if pin_notice { notice_details(ui, &state, self.message.as_ref().or(availability_error.as_ref())); }
+                            else { notice(ui, &state, self.message.as_ref().or(availability_error.as_ref())); }
                         });
                     self.viewport(ui, &mut state);
                 } else {
@@ -694,7 +706,8 @@ impl Desktop {
                         ui.allocate_ui_with_layout(egui::vec2(220.0,height), egui::Layout::top_down(egui::Align::Min), |ui| {
                             egui::ScrollArea::vertical().id_salt("wide_scene_inspector")
                                 .max_height(height).show(ui, |ui| {
-                                    notice(ui, &state, self.message.as_ref().or(availability_error.as_ref()));
+                                    if pin_notice { notice_details(ui, &state, self.message.as_ref().or(availability_error.as_ref())); }
+                                    else { notice(ui, &state, self.message.as_ref().or(availability_error.as_ref())); }
                                     inspector(ui, &mut state, (height-180.0).max(60.0));
                                 });
                         });
@@ -727,7 +740,7 @@ impl Desktop {
             });
         }
         if let Some(error) = &state.interaction_error {
-            ui.colored_label(egui::Color32::LIGHT_RED, error);
+            ui.colored_label(theme::ERROR, error);
         }
         if let Some(texture) = &self.texture {
             let pickable = state.ready
@@ -810,12 +823,16 @@ impl Desktop {
     }
 }
 fn notice(ui: &mut egui::Ui, state: &DisplayState, message: Option<&Notice>) {
+    notice_primary(ui, state, message);
+    notice_details(ui, state, message);
+}
+fn notice_primary(ui: &mut egui::Ui, state: &DisplayState, message: Option<&Notice>) {
     if state.cleanup_failed {
-        ui.colored_label(egui::Color32::LIGHT_RED, "Cleanup incomplete: remote authority/session release or owned process/reader cleanup is unconfirmed. Restart is disabled.");
+        ui.colored_label(theme::ERROR, "Cleanup incomplete: remote authority/session release or owned process/reader cleanup is unconfirmed. Restart is disabled.");
     }
     if let Some(error) = state.error.as_ref().or(message) {
         let first = &error.primary;
-        ui.add(egui::Label::new(egui::RichText::new(first).color(egui::Color32::LIGHT_RED)).wrap());
+        ui.add(egui::Label::new(egui::RichText::new(first).color(theme::ERROR)).wrap());
         ui.label(if state.cleanup_failed {
             "Next: close this window, resolve the shutdown failure in Error details, and confirm the execution's participants have stopped and remote authority/session cleanup is complete before reopening the simulator.".to_owned()
         } else {
@@ -823,6 +840,10 @@ fn notice(ui: &mut egui::Ui, state: &DisplayState, message: Option<&Notice>) {
             // without inferring remediation from phase names or native details.
             format!("Next: {}", error.action)
         });
+    }
+}
+fn notice_details(ui: &mut egui::Ui, state: &DisplayState, message: Option<&Notice>) {
+    if let Some(error) = state.error.as_ref().or(message) {
         ui.collapsing("Error details", |ui| {
             if ui.button("Copy details").clicked() {
                 ui.ctx().copy_text(error.details.clone());
@@ -853,6 +874,23 @@ fn notice(ui: &mut egui::Ui, state: &DisplayState, message: Option<&Notice>) {
             }
         });
     }
+}
+
+fn path_input(ui: &mut egui::Ui, value: &mut String) -> egui::Response {
+    let response = ui.add(
+        egui::TextEdit::singleline(value).desired_width((ui.available_width() - 90.0).max(80.0)),
+    );
+    if response.has_focus() {
+        // TextEdit uses selection.stroke for its focused frame. Overlay only
+        // that frame so text selection retains the normal teal semantics.
+        ui.painter().rect_stroke(
+            response.rect,
+            egui::CornerRadius::same(4),
+            egui::Stroke::new(2.0, egui::Color32::WHITE),
+            egui::StrokeKind::Inside,
+        );
+    }
+    response
 }
 
 fn queue_scene(state: &mut DisplayState, action: scene::SceneAction) {

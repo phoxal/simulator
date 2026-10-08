@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod progress;
+mod terminal;
+use progress::Progress;
 mod archive;
 mod image;
 use archive::extract_tar;
@@ -184,38 +187,72 @@ fn validate_managed_for(path: &Path, cancel: &Cancellation, target: &str) -> Res
     Ok(())
 }
 
-pub(crate) fn run(cancel: &Cancellation) -> Result<PathBuf, String> {
+fn run(cancel: &Cancellation, progress: &Progress) -> Result<PathBuf, String> {
     let root = root()?;
     let spec = distribution()?;
-    install(&root, &spec, cancel, |destination, cancel| {
-        download(&spec, destination, cancel)
-    })
+    install_with_progress(
+        &root,
+        &spec,
+        cancel,
+        Some(progress),
+        |destination, cancel| download(&spec, destination, cancel, progress),
+    )
 }
 
 pub(crate) fn run_cli() -> Result<PathBuf, String> {
+    let progress = std::sync::Arc::new(Progress::start());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| e.to_string())?;
-    runtime.block_on(async {
-        let cancel = Cancellation::default();
-        let owner_cancel = cancel.clone();
-        let mut owner = tokio::task::spawn_blocking(move || run(&owner_cancel));
-        tokio::select! {
-            result = &mut owner => result.map_err(|e| e.to_string())?,
-            signal = tokio::signal::ctrl_c() => {
-                signal.map_err(|e| e.to_string())?;
-                cancel.cancel();
-                owner.await.map_err(|e| e.to_string())?
+    runtime
+        .block_on(async {
+            let cancel = Cancellation::default();
+            let owner_cancel = cancel.clone();
+            let owner_progress = progress.clone();
+            let mut owner =
+                tokio::task::spawn_blocking(move || run(&owner_cancel, &owner_progress));
+            tokio::select! {
+                result = &mut owner => result.map_err(|e| e.to_string())?,
+                signal = tokio::signal::ctrl_c() => {
+                    signal.map_err(|e| e.to_string())?;
+                    cancel.cancel();
+                    progress.cancel();
+                    owner.await.map_err(|e| e.to_string())?
+                }
             }
-        }
-    })
+        })
+        .map_err(terminal_diagnostic)
 }
 
+fn terminal_diagnostic(error: String) -> String {
+    error
+        .chars()
+        .flat_map(|character| {
+            if character.is_control() && character != '\n' {
+                character.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![character]
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
 fn install(
     root: &Path,
     spec: &Distribution,
     cancel: &Cancellation,
+    obtain: impl FnOnce(&Path, &Cancellation) -> Result<(), String>,
+) -> Result<PathBuf, String> {
+    install_with_progress(root, spec, cancel, None, obtain)
+}
+
+fn install_with_progress(
+    root: &Path,
+    spec: &Distribution,
+    cancel: &Cancellation,
+    progress: Option<&Progress>,
     obtain: impl FnOnce(&Path, &Cancellation) -> Result<(), String>,
 ) -> Result<PathBuf, String> {
     cancel.check()?;
@@ -235,12 +272,19 @@ fn install(
                 e,
             )
         })?;
+    let mut waiting = false;
     let deadline = Instant::now() + Duration::from_secs(180);
     loop {
         cancel.check()?;
         match lock.try_lock_exclusive() {
             Ok(()) => break,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if !waiting {
+                    if let Some(progress) = progress {
+                        progress.phase("Waiting for setup lock");
+                    }
+                    waiting = true;
+                }
                 if Instant::now() >= deadline {
                     return Err("Another setup is still running; retry when it completes".into());
                 }
@@ -253,8 +297,14 @@ fn install(
     let library = destination.join(spec.library);
     // An installed directory is immutable. Never replace a possibly live API.
     if destination.exists() {
+        if let Some(progress) = progress {
+            progress.phase("Checking existing installation");
+        }
         validate_install(&destination, spec, cancel)?;
         crate::native_binding::probe_library_with_cancel(&library, cancel)?;
+        if let Some(progress) = progress {
+            progress.verified_reuse();
+        }
         return Ok(library);
     }
     let temporary = tempfile::Builder::new()
@@ -262,11 +312,20 @@ fn install(
         .tempdir_in(&parent)
         .map_err(|e| setup_write_error("creating setup transaction", &parent, e))?;
     let archive = temporary.path().join(spec.archive);
+    if let Some(progress) = progress {
+        progress.phase("Downloading");
+    }
     obtain(&archive, cancel)?;
+    if let Some(progress) = progress {
+        progress.phase("Verifying archive");
+    }
     verify_digest(&archive, spec.checksum, cancel)?;
     let staged = temporary.path().join("runtime");
     fs::create_dir(&staged)
         .map_err(|e| setup_write_error("creating staged runtime", &staged, e))?;
+    if let Some(progress) = progress {
+        progress.phase("Extracting runtime");
+    }
     if spec.dmg {
         let extraction = extract_dmg(&archive, &staged, temporary.path(), cancel);
         if !extraction.cleanup_complete {
@@ -282,6 +341,9 @@ fn install(
         extract_tar(&archive, &staged, temporary.path(), cancel)?;
     }
     cancel.check()?;
+    if let Some(progress) = progress {
+        progress.phase("Checking MuJoCo compatibility");
+    }
     crate::native_binding::probe_library_with_cancel(&staged.join(spec.library), cancel)
         .map_err(|e| format!("Downloaded runtime failed complete API admission: {e}"))?;
     let provenance = serde_json::json!({
@@ -303,6 +365,9 @@ fn install(
     })?;
     validate_install(&staged, spec, cancel)?;
     cancel.check()?;
+    if let Some(progress) = progress {
+        progress.phase("Installing verified runtime");
+    }
     fs::rename(&staged, &destination)
         .map_err(|e| setup_write_error("atomically publishing runtime", &destination, e))?;
     Ok(library)
@@ -391,7 +456,12 @@ fn file_digest(path: &Path, cancel: &Cancellation) -> Result<String, String> {
     }
 }
 
-fn download(spec: &Distribution, destination: &Path, cancel: &Cancellation) -> Result<(), String> {
+fn download(
+    spec: &Distribution,
+    destination: &Path,
+    cancel: &Cancellation,
+    progress: &Progress,
+) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -400,19 +470,23 @@ fn download(spec: &Distribution, destination: &Path, cancel: &Cancellation) -> R
         tokio::select! {
             biased;
             _ = cancel.wait() => Err("Operation cancelled".into()),
-            result = transfer(spec, destination) => result,
+            result = transfer(spec, destination, progress) => result,
         }
     })
 }
 
-async fn transfer(spec: &Distribution, destination: &Path) -> Result<(), String> {
+async fn transfer(
+    spec: &Distribution,
+    destination: &Path,
+    progress: &Progress,
+) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(120))
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .map_err(|e| e.to_string())?;
-    let mut response = client
+    let response = client
         .get(format!(
             "https://github.com/google-deepmind/mujoco/releases/download/{VERSION}/{}",
             spec.archive
@@ -421,24 +495,46 @@ async fn transfer(spec: &Distribution, destination: &Path) -> Result<(), String>
         .await
         .and_then(reqwest::Response::error_for_status)
         .map_err(|e| {
-            format!("Cannot download MuJoCo: {e}. Retry setup when network access is available.")
+            format!(
+                "Cannot download MuJoCo: {}. Retry setup when network access is available.",
+                e.without_url()
+            )
         })?;
+    receive(response, destination, progress)
+        .await
+        .map_err(|error| format!("{error}\nArchive: {}", spec.archive))
+}
+
+async fn receive(
+    mut response: reqwest::Response,
+    destination: &Path,
+    progress: &Progress,
+) -> Result<(), String> {
     if response
         .content_length()
         .is_some_and(|bytes| bytes > MAX_DOWNLOAD)
     {
         return Err("Runtime download exceeds size limit".into());
     }
+    let expected = response.content_length().filter(|total| *total > 0);
+    progress.bytes(0, expected);
     let mut file = File::create(destination)
         .map_err(|e| setup_write_error("creating downloaded archive", destination, e))?;
     let mut total = 0u64;
-    while let Some(bytes) = response.chunk().await.map_err(|error| format!("MuJoCo archive transfer failed: {error}; cause: {}\nArchive: {}\nNext: check network/proxy access and rerun {}. The incomplete transaction will not be published.", std::error::Error::source(&error).map(ToString::to_string).unwrap_or_else(|| "no additional loader cause".into()), spec.archive, command().unwrap_or_else(|_| "phoxal-simulator setup with the selected runtime root".into())))? {
+    while let Some(bytes) = response.chunk().await.map_err(|error| {
+        let cause = std::error::Error::source(&error)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "no additional transfer cause".into());
+        format!("MuJoCo archive transfer failed: {}; cause: {cause}\nNext: check network/proxy access and rerun {}. The incomplete transaction will not be published.", error.without_url(), command().unwrap_or_else(|_| "phoxal-simulator setup with the selected runtime root".into()))
+    })? {
         total += bytes.len() as u64;
+        progress.bytes(total, expected);
         if total > MAX_DOWNLOAD {
             return Err("Runtime download exceeds size limit".into());
         }
         file.write_all(&bytes).map_err(|e| setup_write_error("writing downloaded archive", destination, e))?;
     }
+    progress.report_bytes();
     file.sync_all()
         .map_err(|e| setup_write_error("syncing downloaded archive", destination, e))
 }
