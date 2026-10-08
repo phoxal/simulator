@@ -8,7 +8,7 @@ Robot source preparation belongs to cargo-phoxal.
 
 ```sh
 cargo install phoxal-simulator --locked
-cargo install cargo-phoxal --version 0.4.0 --locked
+cargo install cargo-phoxal --version 0.4.1 --locked
 phoxal-simulator setup
 ```
 
