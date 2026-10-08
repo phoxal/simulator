@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5](https://github.com/phoxal/simulator/compare/phoxal-simulator-v0.2.4...phoxal-simulator-v0.2.5) - 2026-10-08
+
+### Other
+
+- use published cargo-phoxal 0.4.1 for onboarding
+
 ## [0.2.4](https://github.com/phoxal/simulator/compare/phoxal-simulator-v0.2.3...phoxal-simulator-v0.2.4) - 2026-10-08
 
 ### Added
