@@ -91,6 +91,7 @@ fn native_worker_qa_readiness_cancel_and_failure_preserve_cleanup_and_diagnostic
 fn collapsed_cleanup_failure_requires_cleanup_and_reopen_without_impossible_retry() {
     for width in [480.0, 700.0] {
         let context = egui::Context::default();
+        theme::apply(&context);
         let primary =
             "Supervisor startup failed: supervisor exited before readiness: exit status: 7";
         let state = DisplayState {
@@ -154,6 +155,7 @@ fn collapsed_notice_keeps_complete_primary_cause_visible_before_long_path_detail
     for width in [480.0, 700.0] {
         for reason in reasons {
             let context = egui::Context::default();
+            theme::apply(&context);
             let state = DisplayState {
                 error: Some(
                     format!(
@@ -614,6 +616,7 @@ fn native_external_source_pause_trace() {
 fn desktop_layout_retains_a_dominant_unclipped_viewport() {
     for [width, height] in [[480.0, 420.0], [720.0, 560.0], [1200.0, 820.0]] {
         let ctx = egui::Context::default();
+        theme::apply(&ctx);
         let (sender, _) = mpsc::channel(8);
         let mut desktop = Desktop {
             availability: None,
@@ -1203,6 +1206,7 @@ fn expanded_inspector_and_diagnostics_preserve_viewport_across_resizing() {
     }
     for diagnostics_open in [false, true] {
         let ctx = egui::Context::default();
+        theme::apply(&ctx);
         let (sender, _) = mpsc::channel(8);
         let mut desktop = Desktop {
             availability: None,
@@ -1422,6 +1426,7 @@ fn collapsed_notice_projects_the_producing_phase_action() {
             ),
         ] {
             let context = egui::Context::default();
+            theme::apply(&context);
             let state = DisplayState {
                 error: Some(Notice::new(
                     primary,
@@ -1523,6 +1528,7 @@ fn idle_availability_owner_is_nonblocking_isolated_and_cancellable() {
 #[test]
 fn late_idle_availability_cannot_replace_execution_notice_or_cleanup_fence() {
     let context = egui::Context::default();
+    theme::apply(&context);
     let (commands, _) = mpsc::channel(1);
     let display = Arc::new(Mutex::new(DisplayState {
         finished: true,
@@ -1630,6 +1636,7 @@ fn secondary_next_text_cannot_replace_primary_recovery() {
     for width in [480.0, 700.0] {
         for failure in [&native, &graphics, &child] {
             let context = egui::Context::default();
+            theme::apply(&context);
             let state = DisplayState {
                 error: Some(failure.clone()),
                 ..Default::default()
@@ -1665,6 +1672,202 @@ fn secondary_next_text_cannot_replace_primary_recovery() {
                         || line == "Next: SECONDARY_PATH_TEXT: dlopen failed"
                         || line == "Next: SECONDARY_CHILD_ACTION")
             );
+        }
+    }
+}
+
+#[test]
+fn idle_runtime_failure_primary_and_action_are_visible_in_the_full_narrow_desktop() {
+    let primary = "MuJoCo 3.12.0 unavailable or incompatible: The native library file or one of its dependencies was not found.";
+    let action = "repair or remove PHOXAL_MUJOCO_LIBRARY=/selected/native runtime directories/another long containing directory/mujoco.framework/Versions/A/missing-library.dylib and retry. This strict override takes precedence over managed setup.";
+    for height in [452.0, 420.0] {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let (commands, _) = mpsc::channel(1);
+        let mut desktop = Desktop {
+            availability: Some(Arc::new(Mutex::new(Some(Err(Notice::new(
+                primary,
+                action,
+                "Selected library: /selected/missing/library",
+            )))))),
+            control: Arc::new(Mutex::new(Control {
+                commands,
+                cancel: crate::cancellation::Cancellation::default(),
+                thread: None,
+            })),
+            display: Arc::new(Mutex::new(DisplayState {
+                finished: true,
+                ..Default::default()
+            })),
+            options: None,
+            build_path: String::new(),
+            scene_path: String::new(),
+            restart: 0,
+            texture: None,
+            message: None,
+            view_camera: None,
+            gesture: None,
+            next_gesture: 0,
+            pointer_cut: None,
+            closing: false,
+            last_viewport: None,
+        };
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, height));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |ui| desktop.draw(ui),
+        );
+        output.textures_delta.clear();
+        for expected in [primary.to_owned(), format!("Next: {action}")] {
+            let rect = output.shapes.iter().find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.text() == expected
+                {
+                    Some((
+                        egui::Rect::from_min_size(text.pos, text.galley.size()),
+                        shape.clip_rect,
+                    ))
+                } else {
+                    None
+                }
+            });
+            println!("Full idle desktop 480x{height}, {expected}: painter geometry {rect:?}");
+            let (rect, clip) =
+                rect.unwrap_or_else(|| panic!("primary text not painted: {expected}"));
+            assert!(
+                screen.contains_rect(rect) && clip.contains_rect(rect),
+                "primary/action is clipped at 480x{height}: {rect:?}, clip {clip:?}"
+            );
+        }
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.text() == "Diagnostics"
+                {
+                    Some(text.pos + egui::vec2(3.0, 3.0))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| panic!("Diagnostics header unavailable at 480x{height}"));
+        let events = vec![
+            egui::Event::PointerMoved(point),
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+        ];
+        let mut clicked = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                time: Some(1.0),
+                ..Default::default()
+            },
+            |ui| desktop.draw(ui),
+        );
+        clicked.textures_delta.clear();
+        let mut expanded = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(2.0),
+                ..Default::default()
+            },
+            |ui| desktop.draw(ui),
+        );
+        expanded.textures_delta.clear();
+        assert!(expanded.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().starts_with("Boundary "))
+        }), "Diagnostics click did not expand its real body");
+        for expected in [primary.to_owned(), format!("Next: {action}")] {
+            let (rect, clip) = expanded
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.text() == expected
+                    {
+                        Some((
+                            egui::Rect::from_min_size(text.pos, text.galley.size()),
+                            shape.clip_rect,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| panic!("primary missing after Diagnostics expansion"));
+            println!(
+                "Expanded idle desktop 480x{height}: primary/action rect={rect:?}, clip={clip:?}"
+            );
+            assert!(screen.contains_rect(rect) && clip.contains_rect(rect));
+        }
+        output.textures_delta.clear();
+    }
+}
+
+#[test]
+fn focused_path_field_paints_white_frame_without_changing_teal_selection() {
+    for adapted in [false, true] {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let selection = ctx.style_of(egui::Theme::Dark).visuals.selection;
+        let mut value = "Selected path".to_owned();
+        let mut field = None;
+        let mut first = ctx.run_ui(Default::default(), |ui| {
+            let response = if adapted {
+                path_input(ui, &mut value)
+            } else {
+                ui.add(egui::TextEdit::singleline(&mut value))
+            };
+            field = Some((response.id, response.rect));
+        });
+        first.textures_delta.clear();
+        ctx.memory_mut(|memory| memory.request_focus(field.unwrap().0));
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let response = if adapted {
+                path_input(ui, &mut value)
+            } else {
+                ui.add(egui::TextEdit::singleline(&mut value))
+            };
+            assert!(response.has_focus());
+            field = Some((response.id, response.rect));
+        });
+        output.textures_delta.clear();
+        let rect = field.unwrap().1;
+        let strokes: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| {
+                if let egui::Shape::Rect(paint) = &shape.shape
+                    && paint.rect.intersects(rect)
+                    && paint.stroke.width > 0.0
+                {
+                    Some(paint.stroke.color)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        println!("TextEdit adapted={adapted}, actual frame strokes={strokes:?}");
+        assert_eq!(ctx.style_of(egui::Theme::Dark).visuals.selection, selection);
+        if adapted {
+            assert!(strokes.contains(&egui::Color32::WHITE));
+        } else {
+            assert!(strokes.contains(&selection.stroke.color));
+            assert!(!strokes.contains(&egui::Color32::WHITE));
         }
     }
 }

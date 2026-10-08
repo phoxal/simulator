@@ -569,3 +569,11 @@ fn contextual_setup_command_preserves_the_selected_root() {
         );
     }
 }
+
+#[test]
+fn terminal_diagnostics_preserve_recovery_lines_without_terminal_controls() {
+    assert_eq!(
+        terminal_diagnostic("failed\u{1b}[2J\r\nNext: repair path\u{7}".into()),
+        "failed\\u{1b}[2J\\r\nNext: repair path\\u{7}"
+    );
+}
