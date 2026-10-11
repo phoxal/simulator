@@ -18,13 +18,9 @@ no Intel artifact is built or advertised; nothing here claims one.
 
 ## Version, source and refusal
 
-The release version comes only from `Cargo.toml` and the tag is
-`phoxal-simulator-v<version>`. The workflow refuses to touch a tag whose
-release already exists and is published, including the currently published
-zero-asset `phoxal-simulator-v0.2.4`; another release requires a new
-Cargo.toml version. A draft from the same source commit may be refreshed
-(delete and recreate) for retry; a draft from a different source is
-refused.
+The release version comes only from `Cargo.toml` and the tag is `phoxal-simulator-v<version>`.
+The workflow refuses any already published version, including releases with no assets; another release requires an unused version in `Cargo.toml`.
+A draft from the same source commit may be refreshed (delete and recreate) for retry; a draft from a different source is refused.
 
 ## Packaging, smoke and checks
 
@@ -45,8 +41,6 @@ The workflow serializes releases and checks published/different-source refusal a
 Only a same-source draft can be refreshed; a human publishes only after the workflow completes and the complete draft is reviewed.
 Published release bytes are never replaced.
 
-Version 0.2.5 is the app source-delivery candidate, selected after live release/tag inspection found 0.2.4 already published with zero assets and no 0.2.5 release or tag.
-The version comes from Cargo.toml; no source-install publication or separate app version is introduced.
 Pull-request CI validates the delivered source on macOS and Linux.
 Release-profile target builds, draft preparation, uploaded/downloaded verification and human publication require the separate manual release workflow after source review and merge; source delivery does not establish those outcomes.
 

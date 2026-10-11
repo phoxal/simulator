@@ -3680,9 +3680,9 @@ dependencies = [
 
 [[package]]
 name = "phoxal"
-version = "0.71.0"
+version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03897e8b7b62e6ea6b884cad2fffdecfb18894c7eae167efa44f8b1d51dafd56"
+checksum = "4747c0f38b849dce2e5ea7e04b4e408276fd683e59fdc88f6798c0f8401666ac"
 dependencies = [
  "anyhow",
  "clap",
@@ -3718,7 +3718,7 @@ dependencies = [
 
 [[package]]
 name = "phoxal-simulator"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "cgl",
  "clap",
