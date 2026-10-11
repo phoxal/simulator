@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use crate::native_binding::prelude::MjData;
+use mujoco_rs::prelude::MjData;
 #[cfg(all(feature = "rendering", target_os = "macos"))]
 mod cgl;
 #[cfg(all(feature = "rendering", target_os = "linux"))]
@@ -175,7 +175,7 @@ pub struct SceneStep {
 /// renderer without an explicit owner boundary.
 pub struct Workspace {
     model: Model,
-    data: MjData<std::sync::Arc<crate::native_binding::wrappers::MjModel>>,
+    data: MjData<std::sync::Arc<mujoco_rs::wrappers::MjModel>>,
     #[cfg(feature = "rendering")]
     renderer: Option<RendererState>,
     _thread_affine: PhantomData<Rc<()>>,
@@ -214,6 +214,11 @@ impl Workspace {
         Ok(workspace)
     }
 
+    #[cfg(all(test, native_qualification))]
+    pub(crate) fn contact_distances(&self) -> Vec<f64> {
+        self.data.contact().iter().map(|c| c.dist).collect()
+    }
+
     /// Returns the immutable model paired with this workspace.
     #[must_use]
     pub fn model(&self) -> &Model {
@@ -226,11 +231,8 @@ impl Workspace {
         let time_seconds = self.data.time();
         let body_velocities = (0..self.model.counts().bodies)
             .map(|body| {
-                self.data.object_velocity(
-                    crate::native_binding::prelude::MjtObj::mjOBJ_XBODY,
-                    body,
-                    false,
-                )
+                self.data
+                    .object_velocity(mujoco_rs::prelude::MjtObj::mjOBJ_XBODY, body, false)
             })
             .collect::<Vec<_>>();
         for (body, velocity) in body_velocities.iter().enumerate() {
@@ -836,7 +838,7 @@ fn time_matches(actual: f64, expected: f64) -> bool {
     (actual - expected).abs() <= TIME_TOLERANCE.max(TIME_TOLERANCE * scale)
 }
 
-#[cfg(test)]
+#[cfg(all(test, native_qualification))]
 mod tests {
     use super::*;
     use crate::mujoco::{ActuatorMode, ClosedModel, JointKind, Resource};
@@ -1077,7 +1079,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, native_qualification))]
 mod root_frame_tests {
     #[test]
     fn physical_root_matches_rigid_child_pose_and_velocity_at_rotated_state() {

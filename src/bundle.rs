@@ -1,11 +1,8 @@
 use crate::mujoco::ClosedModel;
 use crate::mujoco::Resource;
-use phoxal::artifact::bundle::{
-    AdmittedBundle, BundleComponent, BundleInstance, BundleManifest, BundleModelAssets,
-    BundleSimulation,
-};
+use phoxal::artifact::bundle::{AdmittedBundle, BundleComponent, BundleManifest};
 use phoxal::artifact::document::{CapabilityDeclaration, ComponentDocument, ComponentModel};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Component;
 use std::path::Path;
@@ -15,13 +12,16 @@ pub(super) const MODEL_ASSET_PREFIX: &str = "assets/";
 
 pub(super) struct BundleFacts {
     pub(super) root: PathBuf,
-    pub(super) robot_id: String,
-    pub(super) instances: BTreeMap<String, BundleInstance>,
     pub(super) admitted: AdmittedBundle,
-    pub(super) components: BTreeMap<String, BundleComponent>,
-    component_sources: BTreeMap<String, String>,
-    pub(super) model: Option<BundleModelAssets>,
-    pub(super) simulation: Option<BundleSimulation>,
+    pub(super) manifest_bytes: Vec<u8>,
+}
+
+impl std::ops::Deref for BundleFacts {
+    type Target = AdmittedBundle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.admitted
+    }
 }
 
 impl BundleFacts {
@@ -39,16 +39,20 @@ impl BundleFacts {
             .map_err(|message| format!("invalid runtime bundle: {message}"))?;
         let facts = Self {
             root,
-            robot_id: admitted.robot_id.clone(),
-            instances: admitted.instances.clone(),
-            components: admitted.components.clone(),
-            component_sources: admitted.component_sources.clone(),
-            model: admitted.model.clone(),
-            simulation: admitted.simulation.clone(),
             admitted,
+            manifest_bytes,
         };
         if facts.model.is_some() {
-            facts.root_closed_model()?;
+            directory_under(&facts.root, Path::new("assets"), "model assets")?;
+            for resource in &facts
+                .admitted
+                .model
+                .as_ref()
+                .expect("checked model")
+                .resources
+            {
+                regular_file_under(&facts.root, Path::new(resource), resource)?;
+            }
         }
         Ok(facts)
     }
@@ -84,7 +88,12 @@ impl BundleFacts {
         directory_under(&self.root, Path::new("assets"), "model assets")?;
         let mut names = BTreeSet::new();
         let mut resources = Vec::new();
+        let limits = crate::mujoco::ResourceLimits::default();
+        let mut total_bytes = 0usize;
         for resource in &model.resources {
+            if resources.len() >= limits.max_resources {
+                return Err("model resource count exceeds admission limit".into());
+            }
             let name = resource
                 .strip_prefix(MODEL_ASSET_PREFIX)
                 .ok_or_else(|| format!("model resource {resource} is outside assets/"))?;
@@ -93,8 +102,16 @@ impl BundleFacts {
                 return Err(format!("bundle model resource {name:?} is duplicated"));
             }
             let path = regular_file_under(&self.root.join("assets"), Path::new(name), resource)?;
-            let bytes = fs::read(path)
-                .map_err(|error| format!("cannot read model resource {resource}: {error}"))?;
+            let bytes = read_bounded_regular(
+                &path,
+                crate::mujoco::ResourceLimits::default().max_resource_bytes as u64,
+            )?;
+            total_bytes = total_bytes
+                .checked_add(bytes.len())
+                .ok_or("model closure size overflow")?;
+            if total_bytes > limits.max_closure_bytes {
+                return Err("model resource closure exceeds admission limit".into());
+            }
             resources
                 .push(Resource::new(name.to_owned(), bytes).map_err(|error| error.to_string())?);
         }
@@ -147,6 +164,16 @@ fn collect_resources(
     directory: &Path,
     resources: &mut Vec<Resource>,
 ) -> Result<(), String> {
+    let limits = crate::mujoco::ResourceLimits::default();
+    if directory
+        .strip_prefix(root)
+        .map_err(|error| error.to_string())?
+        .components()
+        .count()
+        > 128
+    {
+        return Err("component resource directory nesting exceeds admission limit".into());
+    }
     for entry in fs::read_dir(directory).map_err(|error| {
         format!(
             "cannot read component source {}: {error}",
@@ -174,7 +201,21 @@ fn collect_resources(
             let name = relative.to_str().ok_or_else(|| {
                 format!("component resource {} is not valid UTF-8", path.display())
             })?;
-            let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+            if resources.len() >= limits.max_resources {
+                return Err("component resource count exceeds admission limit".into());
+            }
+            let used = resources
+                .iter()
+                .try_fold(0usize, |sum, resource| {
+                    sum.checked_add(resource.bytes().len())
+                })
+                .ok_or("component closure size overflow")?;
+            let remaining = limits
+                .max_closure_bytes
+                .checked_sub(used)
+                .ok_or("component resource closure exceeds admission limit")?;
+            let bytes =
+                read_bounded_regular(&path, limits.max_resource_bytes.min(remaining) as u64)?;
             resources
                 .push(Resource::new(name.to_owned(), bytes).map_err(|error| error.to_string())?);
         }
@@ -222,7 +263,28 @@ pub(super) fn read_bounded_regular(path: &Path, limit: u64) -> Result<Vec<u8>, S
             limit
         ));
     }
-    fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))
+    use std::io::Read as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+    if !file
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .is_file()
+    {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("{} exceeds the {limit}-byte limit", path.display()));
+    }
+    Ok(bytes)
 }
 
 /// Resolves one relative directory below the canonical bundle root,

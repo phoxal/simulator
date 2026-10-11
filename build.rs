@@ -1,68 +1,26 @@
-//! Generate runtime dispatch from the unmodified upstream ABI declarations.
-//! All inputs are package-local; no native library, headers or compiler are needed.
-use quote::quote;
-use syn::{ForeignItem, Item, Pat};
-
+//! Source builds resolve their private engine through the selected link
+//! directory, mirroring the packaged executable-relative layout.
 fn main() {
-    // The retained upstream ABI has optional viewer annotations. This package
-    // never enables that upstream feature, but Rust's cfg validator must know it.
-    println!("cargo:rustc-check-cfg=cfg(feature, values(\"viewer\"))");
-    let input = "src/native_binding/upstream_ffi.rs";
-    println!("cargo:rerun-if-changed={input}");
-    let source = std::fs::read_to_string(input).expect("packaged ABI declarations");
-    let file = syn::parse_file(&source).expect("upstream Rust ABI");
-    let mut types = Vec::new();
-    let mut fields = Vec::new();
-    let mut loads = Vec::new();
-    let mut forwards = Vec::new();
-    for item in file.items {
-        if let Item::ForeignMod(block) = item {
-            for item in block.items {
-                if let ForeignItem::Fn(function) = item {
-                    let variadic = function.sig.variadic.as_ref().map(|_| quote!(, ...));
-                    let name = function.sig.ident;
-                    let output = function.sig.output;
-                    let inputs = function.sig.inputs;
-                    let mut args = Vec::new();
-                    let mut argument_types = Vec::new();
-                    for argument in &inputs {
-                        let syn::FnArg::Typed(argument) = argument else {
-                            panic!("C receiver");
-                        };
-                        let Pat::Ident(identifier) = &*argument.pat else {
-                            panic!("C argument name");
-                        };
-                        args.push(identifier.ident.clone());
-                        argument_types.push(argument.ty.clone());
-                    }
-                    fields.push(quote!(pub #name: unsafe extern "C" fn(#(#argument_types),* #variadic) #output));
-                    loads.push(quote!(#name: unsafe { *library.get(concat!(stringify!(#name), "\0").as_bytes()).map_err(|error| format!("MuJoCo symbol {}: {error}", stringify!(#name)))? }));
-                    forwards.push(quote!(pub unsafe extern "C" fn #name(#inputs) #output { unsafe { (super::api().#name)(#(#args),*) } }));
-                }
+    // The rpath follows the engine the linker actually selected, so runtime
+    // discovery stays coherent when a deliberate environment override (CI
+    // provisioning, a relocated provisioned root) changes the link directory.
+    // Cargo's repository [.cargo/config.toml] supplies the default value;
+    // see README "Contributor source builds".
+    println!("cargo:rerun-if-env-changed=MUJOCO_DYNAMIC_LINK_DIR");
+    let engine_lib = std::env::var("MUJOCO_DYNAMIC_LINK_DIR").ok();
+    match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("macos") => {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
+            if let Some(dir) = engine_lib {
+                println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
             }
-        } else {
-            types.push(item);
         }
+        Ok("linux") => {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib");
+            if let Some(dir) = engine_lib {
+                println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
+            }
+        }
+        _ => {}
     }
-    let generated = quote! {
-        #(#types)*
-        pub(super) struct Api {
-            #(#fields,)*
-            // The library stays loaded for the complete process lifetime, including object drops.
-            _library: libloading::Library,
-        }
-        impl Api {
-            pub(super) unsafe fn load(library: libloading::Library) -> Result<Self, String> {
-                Ok(Self { #(#loads,)* _library: library })
-            }
-        }
-        #(#forwards)*
-    };
-    let file = syn::parse2(generated).expect("generated runtime dispatch");
-    let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo OUT_DIR"));
-    std::fs::write(
-        output.join("mujoco_dispatch.rs"),
-        prettyplease::unparse(&file),
-    )
-    .expect("write dispatch");
 }

@@ -2,17 +2,17 @@
 
 use crate::mujoco::{Model, StateSnapshot};
 use crate::{
+    app::{Command, Worker},
     authority::{AuthorityState, SimulationTransport},
-    desktop::{Command, Worker},
     native_provider::ComponentProvider,
     remote::RemoteSceneRun,
 };
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::error::TryRecvError;
 
-mod interaction;
-mod timing;
-mod viewport;
+pub(crate) mod interaction;
+pub(crate) mod timing;
+pub(crate) mod viewport;
 pub(crate) use timing::Pacing;
 use timing::Timing;
 
@@ -45,10 +45,22 @@ pub(super) async fn drive<T: SimulationTransport>(
     let mut frame_due = true;
     let mut last_frame = Instant::now();
     let mut last_renewal = Instant::now();
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-        .map_err(|e| e.to_string())?;
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|e| e.to_string())?;
+    // Headless execution owns the process lifetime. Desktop signals belong
+    // to the application Handle, surviving Stop and document replacement.
+    let (mut interrupt, mut terminate) = if desktop.is_none() {
+        (
+            Some(
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                    .map_err(|e| e.to_string())?,
+            ),
+            Some(
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .map_err(|e| e.to_string())?,
+            ),
+        )
+    } else {
+        (None, None)
+    };
     let epoch = Instant::now();
     let mut timing = Timing::new(if desktop.is_some() {
         Pacing::Realtime
@@ -68,8 +80,8 @@ pub(super) async fn drive<T: SimulationTransport>(
         }
         let stop_signal = tokio::select! {
             biased;
-            _ = interrupt.recv() => true,
-            _ = terminate.recv() => true,
+            _ = async { match &mut interrupt { Some(signal) => { signal.recv().await; }, None => std::future::pending().await } } => true,
+            _ = async { match &mut terminate { Some(signal) => { signal.recv().await; }, None => std::future::pending().await } } => true,
             _ = std::future::ready(()) => false,
         };
         if stop_signal {
@@ -83,8 +95,13 @@ pub(super) async fn drive<T: SimulationTransport>(
             break;
         }
         let mut single_step = false;
+        let mut commands_pending = false;
         if let Some(worker) = &mut desktop {
-            loop {
+            // Capacity bounds storage; this budget also bounds work under refill.
+            for _ in 0..8 {
+                if worker.cancel.is_cancelled() {
+                    break 'execution;
+                }
                 let command = pending
                     .take()
                     .map(Ok)
@@ -122,11 +139,20 @@ pub(super) async fn drive<T: SimulationTransport>(
                             viewport.reset(run.generation(), &worker.display)?;
                         }
                         frame_due = true;
+                        if worker.cancel.is_cancelled() {
+                            break 'execution;
+                        }
                     }
                     Ok(Command::Stop) | Err(TryRecvError::Disconnected) => break 'execution,
                     Err(TryRecvError::Empty) => break,
                 }
             }
+        }
+        if let Some(worker) = &desktop {
+            if worker.cancel.is_cancelled() {
+                break;
+            }
+            commands_pending = !single_step && !worker.commands.is_empty();
         }
         if let (Some(viewport), Some(worker)) = (&mut viewport, &desktop) {
             let view_changed = {
@@ -134,7 +160,7 @@ pub(super) async fn drive<T: SimulationTransport>(
                     .display
                     .lock()
                     .map_err(|_| "desktop state lock poisoned")?;
-                state.pending_camera.is_some() || state.pending_scene.is_some()
+                state.requests.pending_camera.is_some() || state.requests.pending_scene.is_some()
             };
             if view_changed {
                 interaction.cancel(run, &worker.display)?;
@@ -153,11 +179,35 @@ pub(super) async fn drive<T: SimulationTransport>(
                 break;
             }
         }
-        if (single_step || (running && delay.is_zero())) && run.boundary() < requested_steps {
+        if (single_step || (running && delay.is_zero() && !commands_pending))
+            && run.boundary() < requested_steps
+        {
             if single_step {
                 timing.resume(epoch.elapsed(), sim_time(run));
             }
-            step(run).await?;
+            if let (Some(viewport), Some(worker)) = (&mut viewport, &desktop) {
+                if advance_presented(
+                    run,
+                    viewport,
+                    worker,
+                    &mut last_frame,
+                    interaction.terminal(),
+                )
+                .await?
+                {
+                    interaction.cancel(run, &worker.display)?;
+                }
+            } else {
+                step(run).await?;
+            }
+            if desktop
+                .as_ref()
+                .is_some_and(|worker| worker.cancel.is_cancelled())
+            {
+                // The outstanding acknowledgement was observed; stop before any new mutation.
+                snapshots.record(run.state().clone());
+                break;
+            }
             snapshots.record(run.state().clone());
             frame_due = true;
             if single_step {
@@ -190,11 +240,12 @@ pub(super) async fn drive<T: SimulationTransport>(
                     .clone_from(&run.provenance().robot_bundle_identity);
             }
             state.ready = run.authority_state() == AuthorityState::Acquired;
-            state.phase = "";
+            state.phase = crate::app::RunStatus::Executing;
             state.running = running;
             state.boundary = run.boundary();
             state.generation = run.generation();
             state.time_seconds = run.state().time_seconds();
+            state.native_state = Some(std::sync::Arc::new(run.state().clone()));
             state.wall_seconds = timing.wall(epoch.elapsed()).as_secs_f64();
             state.speed = timing.speed(epoch.elapsed(), sim_time(run));
             state.pacing = timing.mode;
@@ -234,6 +285,9 @@ pub(super) async fn drive<T: SimulationTransport>(
                 state.actuation_products = 0;
             }
         }
+        if commands_pending {
+            tokio::task::yield_now().await;
+        }
         let delay = timing.delay(epoch.elapsed(), sim_time(run));
         if !running || !delay.is_zero() {
             // Camera/UI updates and lease renewal remain live while pacing or paused.
@@ -245,11 +299,11 @@ pub(super) async fn drive<T: SimulationTransport>(
             tokio::select! {
                 biased;
                 _ = async { match &cancel { Some(cancel) => cancel.wait().await, None => std::future::pending().await }} => break,
-                _ = interrupt.recv() => {
+                _ = async { match &mut interrupt { Some(signal) => { signal.recv().await; }, None => std::future::pending().await } } => {
                     if let Some(worker) = &desktop { worker.display.lock().map_err(|_| "desktop state lock poisoned")?.close_requested = true; }
                     break;
                 }
-                _ = terminate.recv() => {
+                _ = async { match &mut terminate { Some(signal) => { signal.recv().await; }, None => std::future::pending().await } } => {
                     if let Some(worker) = &desktop { worker.display.lock().map_err(|_| "desktop state lock poisoned")?.close_requested = true; }
                     break;
                 }
@@ -262,16 +316,79 @@ pub(super) async fn drive<T: SimulationTransport>(
         }
     }
     if let Some(worker) = &desktop {
+        interaction.cancel(run, &worker.display)?;
         let mut state = worker
             .display
             .lock()
             .map_err(|_| "desktop state lock poisoned")?;
         state.running = false;
+        state.boundary = run.boundary();
+        state.generation = run.generation();
+        state.time_seconds = run.state().time_seconds();
+        state.native_state = Some(std::sync::Arc::new(run.state().clone()));
         state.wall_seconds = timing.wall(epoch.elapsed()).as_secs_f64();
         state.speed = None;
+    } else {
+        run.cancel_drag();
     }
-    run.cancel_drag();
     Ok(snapshots.values)
+}
+
+// Keep the last completed boundary visible while the next acknowledgement is
+// outstanding. All native calls remain on this worker thread, using a separate
+// presentation workspace. Never cancel/drop the in-flight boundary future.
+async fn advance_presented<T: SimulationTransport>(
+    run: &mut Run<T>,
+    viewport: &mut viewport::Viewport,
+    worker: &Worker,
+    last_frame: &mut Instant,
+    terminal_gesture: u64,
+) -> Result<bool, String> {
+    let completed = run.state().clone();
+    let boundary = step(run);
+    tokio::pin!(boundary);
+    let period = Duration::from_millis(33);
+    let mut cadence = tokio::time::interval_at(
+        tokio::time::Instant::now() + period.saturating_sub(last_frame.elapsed()),
+        period,
+    );
+    cadence.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut presentation_error = None;
+    let mut changed = false;
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut boundary => return match (result, presentation_error) {
+                (Ok(()), None) => Ok(changed),
+                (Ok(()), Some(error)) => Err(error),
+                (Err(primary), None) => Err(primary),
+                (Err(primary), Some(error)) => Err(format!("{primary}; presentation failed: {error}")),
+            },
+            _ = cadence.tick() => {
+                let presented = (|| -> Result<(), String> {
+                if worker.cancel.is_cancelled() {
+                    let mut state = worker.display.lock().map_err(|_| "run state lock poisoned")?;
+                    state.stopping = true;
+                    state.phase = crate::app::RunStatus::Stopping;
+                    let id = state.requests.drag_mailbox.begin.as_ref().map_or(state.requests.drag_mailbox.ended, |begin| begin.id);
+                    state.requests.drag_mailbox.end(id.max(terminal_gesture));
+                }
+                // Camera/selection uses only the already completed, identity-bound view.
+                changed |= viewport.input(&worker.display)?;
+                let frame = viewport.render(&completed)?;
+                *last_frame = Instant::now();
+                let mut state = worker.display.lock().map_err(|_| "run state lock poisoned")?;
+                viewport.publish(&mut state);
+                state.frame = Some(frame);
+                Ok(())
+                })();
+                if let Err(error) = presented {
+                    presentation_error.get_or_insert(error);
+                    // Keep polling the acknowledged operation, even after rendering fails.
+                }
+            }
+        }
+    }
 }
 
 async fn step<T: SimulationTransport>(run: &mut Run<T>) -> Result<(), String> {

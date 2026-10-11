@@ -5,7 +5,7 @@ mod config;
 mod geodesy;
 mod observations;
 mod runtime;
-#[cfg(test)]
+#[cfg(all(test, native_qualification))]
 mod tests;
 
 pub(crate) use config::{

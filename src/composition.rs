@@ -23,6 +23,15 @@ pub(super) fn load_composed_model(scene: &Path, bundle: &BundleFacts) -> Result<
     regular_file(&scene, &scene.display().to_string())?;
     let scene = ClosedModel::from_referenced_file(&scene)
         .map_err(|error| format!("cannot close scene {}: {error}", scene.display()))?;
+    compose_closed(scene, bundle, "robot_mount", None)
+}
+
+pub(super) fn compose_closed(
+    scene: ClosedModel,
+    bundle: &BundleFacts,
+    target: &str,
+    placement: Option<([f64; 3], [f64; 4])>,
+) -> Result<Model, String> {
     bundle
         .model
         .as_ref()
@@ -47,11 +56,12 @@ pub(super) fn load_composed_model(scene: &Path, bundle: &BundleFacts) -> Result<
         scene,
         robot,
         bundle.robot_id.clone(),
-        "robot_mount",
+        target,
         robot_root,
         attachments,
     )
     .map_err(|error| error.to_string())?
+    .with_placement(placement)
     .compile()
     .map_err(|error| error.to_string())
 }

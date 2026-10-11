@@ -340,6 +340,7 @@ struct AssetDirectories {
     texture: Option<String>,
 }
 
+#[derive(Debug)]
 struct XmlTag {
     name: String,
     attributes: BTreeMap<String, String>,
@@ -763,141 +764,105 @@ fn validate_file_format(
     Ok(())
 }
 
+pub(super) fn xml_element_names(path: &str, document: &str) -> Result<Vec<String>, ArtifactError> {
+    Ok(parse_xml_tags(path, document)?
+        .into_iter()
+        .map(|tag| tag.name)
+        .collect())
+}
+
+// Policy tokenization never rewrites the identity-bearing input bytes.
+// Memory is bounded by the resource limit, element limit and nesting limit.
 fn parse_xml_tags(path: &str, document: &str) -> Result<Vec<XmlTag>, ArtifactError> {
+    use quick_xml::{Reader, events::Event};
+    const MAX_DEPTH: usize = 128;
+    const MAX_ELEMENTS: usize = 65_536;
+    if document.len() > DEFAULT_MAX_RESOURCE_BYTES {
+        return Err(invalid_xml_reference(
+            path,
+            "XML input exceeds the admission limit",
+        ));
+    }
     if document.contains('&') {
         return Err(invalid_xml_reference(
             path,
             "XML entities are not admitted in a closed MJCF resource",
         ));
     }
-    let bytes = document.as_bytes();
+    let mut reader = Reader::from_str(document);
+    reader.config_mut().enable_all_checks(true);
+    reader.config_mut().allow_unmatched_ends = false;
+    let mut depth = 0usize;
+    let mut roots = 0usize;
     let mut tags = Vec::new();
-    let mut cursor = 0usize;
-    while let Some(relative) = bytes[cursor..].iter().position(|byte| *byte == b'<') {
-        let start = cursor + relative;
-        if bytes[start..].starts_with(b"<!--") {
-            let end = document[start + 4..]
-                .find("-->")
-                .map(|offset| start + 4 + offset + 3)
-                .ok_or_else(|| invalid_xml_reference(path, "unterminated XML comment"))?;
-            cursor = end;
-            continue;
-        }
-        if bytes[start..].starts_with(b"<!") {
-            return Err(invalid_xml_reference(
-                path,
-                "DTD, entity, CDATA, and other XML declarations are not admitted",
-            ));
-        }
-        if bytes[start..].starts_with(b"<?") {
-            let end = find_tag_end(document, start + 1)
-                .ok_or_else(|| invalid_xml_reference(path, "unterminated XML declaration"))?;
-            cursor = end + 1;
-            continue;
-        }
-        let end = find_tag_end(document, start + 1)
-            .ok_or_else(|| invalid_xml_reference(path, "unterminated XML element"))?;
-        let body = document[start + 1..end].trim_end();
-        if body.starts_with('/') {
-            cursor = end + 1;
-            continue;
-        }
-        tags.push(parse_xml_tag(path, body)?);
-        cursor = end + 1;
-    }
-    Ok(tags)
-}
-
-fn find_tag_end(document: &str, start: usize) -> Option<usize> {
-    let bytes = document.as_bytes();
-    let mut quote = None;
-    for (index, byte) in bytes.iter().copied().enumerate().skip(start) {
-        match (quote, byte) {
-            (None, b'\'' | b'"') => quote = Some(bytes[index]),
-            (Some(expected), byte) if byte == expected => quote = None,
-            (None, b'>') => return Some(index),
+    loop {
+        let event = reader
+            .read_event()
+            .map_err(|error| invalid_xml_reference(path, format!("malformed XML: {error}")))?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                if depth == 0 {
+                    roots += 1;
+                    if roots > 1 {
+                        return Err(invalid_xml_reference(
+                            path,
+                            "XML has multiple root elements",
+                        ));
+                    }
+                }
+                if depth >= MAX_DEPTH || tags.len() >= MAX_ELEMENTS {
+                    return Err(invalid_xml_reference(
+                        path,
+                        "XML nesting or element count exceeds the admission limit",
+                    ));
+                }
+                let name = std::str::from_utf8(element.name().as_ref())
+                    .map_err(|error| invalid_xml_reference(path, error.to_string()))?
+                    .to_owned();
+                let mut attributes = BTreeMap::new();
+                for attribute in element.attributes().with_checks(true) {
+                    let attribute = attribute.map_err(|error| {
+                        invalid_xml_reference(path, format!("invalid XML attribute: {error}"))
+                    })?;
+                    let key = std::str::from_utf8(attribute.key.as_ref())
+                        .map_err(|error| invalid_xml_reference(path, error.to_string()))?;
+                    let value = std::str::from_utf8(&attribute.value)
+                        .map_err(|error| invalid_xml_reference(path, error.to_string()))?;
+                    attributes.insert(key.to_owned(), value.to_owned());
+                }
+                tags.push(XmlTag { name, attributes });
+                if matches!(event, Event::Start(_)) {
+                    depth += 1;
+                }
+            }
+            Event::End(_) => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| invalid_xml_reference(path, "unmatched XML end element"))?;
+            }
+            // Reader::from_str consumes already admitted UTF-8 bytes. Like the
+            // native parser, it does not transcode from declaration labels.
+            Event::Decl(_) => {}
+            Event::DocType(_) | Event::CData(_) | Event::GeneralRef(_) => {
+                return Err(invalid_xml_reference(
+                    path,
+                    "DTD, entity, CDATA, and other XML declarations are not admitted",
+                ));
+            }
+            Event::Text(text) if depth == 0 && !text.iter().all(u8::is_ascii_whitespace) => {
+                return Err(invalid_xml_reference(path, "text outside XML root element"));
+            }
+            Event::Eof => break,
             _ => {}
         }
     }
-    None
-}
-
-fn parse_xml_tag(path: &str, body: &str) -> Result<XmlTag, ArtifactError> {
-    let body = body.trim_end_matches('/').trim_end();
-    let name_end = body
-        .find(|character: char| character.is_ascii_whitespace())
-        .unwrap_or(body.len());
-    let name = &body[..name_end];
-    if name.is_empty() {
-        return Err(invalid_xml_reference(path, "XML element has no name"));
+    if depth != 0 || roots != 1 {
+        return Err(invalid_xml_reference(
+            path,
+            "XML root is missing or unclosed",
+        ));
     }
-    let mut attributes = BTreeMap::new();
-    let mut cursor = name_end;
-    while cursor < body.len() {
-        while cursor < body.len() && body.as_bytes()[cursor].is_ascii_whitespace() {
-            cursor += 1;
-        }
-        if cursor >= body.len() {
-            break;
-        }
-        let key_start = cursor;
-        while cursor < body.len()
-            && !body.as_bytes()[cursor].is_ascii_whitespace()
-            && body.as_bytes()[cursor] != b'='
-        {
-            cursor += 1;
-        }
-        let key = &body[key_start..cursor];
-        if key.is_empty() {
-            return Err(invalid_xml_reference(path, "XML attribute has no name"));
-        }
-        while cursor < body.len() && body.as_bytes()[cursor].is_ascii_whitespace() {
-            cursor += 1;
-        }
-        if cursor >= body.len() || body.as_bytes()[cursor] != b'=' {
-            return Err(invalid_xml_reference(
-                path,
-                format!("XML attribute {key:?} has no '='"),
-            ));
-        }
-        cursor += 1;
-        while cursor < body.len() && body.as_bytes()[cursor].is_ascii_whitespace() {
-            cursor += 1;
-        }
-        if cursor >= body.len() || !matches!(body.as_bytes()[cursor], b'\'' | b'"') {
-            return Err(invalid_xml_reference(
-                path,
-                format!("XML attribute {key:?} is not quoted"),
-            ));
-        }
-        let quote = body.as_bytes()[cursor];
-        cursor += 1;
-        let value_start = cursor;
-        while cursor < body.len() && body.as_bytes()[cursor] != quote {
-            cursor += 1;
-        }
-        if cursor >= body.len() {
-            return Err(invalid_xml_reference(
-                path,
-                format!("XML attribute {key:?} is unterminated"),
-            ));
-        }
-        let value = &body[value_start..cursor];
-        cursor += 1;
-        if attributes
-            .insert(key.to_owned(), value.to_owned())
-            .is_some()
-        {
-            return Err(invalid_xml_reference(
-                path,
-                format!("XML attribute {key:?} appears more than once"),
-            ));
-        }
-    }
-    Ok(XmlTag {
-        name: name.to_owned(),
-        attributes,
-    })
+    Ok(tags)
 }
 
 fn resolve_resource_reference(
@@ -1514,5 +1479,100 @@ mod referenced_resources_tests {
         )
         .expect("symlink scene");
         assert!(ClosedModel::from_referenced_file(root.join("scene.xml")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod xml_admission_tests {
+    use super::*;
+
+    #[test]
+    fn comments_are_tokens_and_original_bytes_remain_identity_material() {
+        let plain = "<mujoco><worldbody/></mujoco>";
+        let comment = "<mujoco><!-- <keyframe><key/></keyframe> --><worldbody/></mujoco>";
+        let first = ClosedModel::from_xml(plain).unwrap();
+        let second = ClosedModel::from_xml(comment).unwrap();
+        assert_ne!(first.digest(), second.digest());
+        assert_eq!(
+            second.resources().next().unwrap().bytes(),
+            comment.as_bytes()
+        );
+        assert_eq!(
+            xml_element_names("scene.xml", comment).unwrap(),
+            ["mujoco", "worldbody"]
+        );
+        assert!(
+            xml_element_names("scene.xml", "<mujoco><keyframe/></mujoco>")
+                .unwrap()
+                .iter()
+                .any(|name| name == "keyframe")
+        );
+    }
+
+    #[test]
+    fn declarations_comments_and_quoted_delimiters_are_admitted() {
+        for xml in [
+            "<?xml version='1.0' encoding='UTF-8'?><mujoco><worldbody/></mujoco>",
+            "<?xml version='1.0' encoding='UTF-16'?><mujoco><worldbody/></mujoco>",
+            "<?instruction?><mujoco><!-- a > b --><worldbody/></mujoco>",
+            "<mujoco model='a > b'><worldbody/></mujoco>",
+        ] {
+            ClosedModel::from_xml(xml).unwrap();
+        }
+    }
+
+    #[test]
+    fn malformed_or_expanding_documents_are_reason_specific_refusals() {
+        for (xml, reason) in [
+            ("<mujoco><body></mujoco>", "malformed XML"),
+            ("<mujoco><body>", "unclosed"),
+            ("<mujoco/><mujoco/>", "multiple root"),
+            ("<mujoco model='a' model='b'/>", "attribute"),
+            ("<mujoco><!-- unterminated", "malformed XML"),
+            ("<!DOCTYPE mujoco><mujoco/>", "DTD"),
+            ("<mujoco><![CDATA[<keyframe/>]]></mujoco>", "CDATA"),
+            ("<mujoco model='a&amp;b'/>", "entities"),
+            ("outside<mujoco/>", "not an XML document"),
+        ] {
+            let error = ClosedModel::from_xml(xml).unwrap_err().to_string();
+            assert!(error.contains(reason), "{xml}: {error}, expected {reason}");
+        }
+    }
+
+    #[test]
+    fn depth_element_input_and_existing_closure_limits_are_bounded() {
+        let depth = format!("{}{}", "<body>".repeat(129), "</body>".repeat(129));
+        assert!(
+            parse_xml_tags("deep.xml", &depth)
+                .unwrap_err()
+                .to_string()
+                .contains("nesting")
+        );
+        let elements = format!("<mujoco>{}</mujoco>", "<body/>".repeat(65_536));
+        assert!(
+            parse_xml_tags("many.xml", &elements)
+                .unwrap_err()
+                .to_string()
+                .contains("element count")
+        );
+        let oversized = " ".repeat(DEFAULT_MAX_RESOURCE_BYTES + 1);
+        assert!(
+            parse_xml_tags("large.xml", &oversized)
+                .unwrap_err()
+                .to_string()
+                .contains("input")
+        );
+        let limits = ResourceLimits {
+            max_resource_bytes: 10,
+            ..ResourceLimits::default()
+        };
+        assert!(
+            ClosedModel::with_limits(
+                "scene.xml",
+                [Resource::new("scene.xml", b"<mujoco/>").unwrap()],
+                limits
+            )
+            .is_ok()
+        );
     }
 }

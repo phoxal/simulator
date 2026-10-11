@@ -27,6 +27,8 @@ pub use artifact::{ClosedModel, Resource, ResourceLimits};
 pub use error::ArtifactError;
 
 #[cfg(feature = "native")]
+pub(crate) use composition::validate_scene_policy;
+#[cfg(feature = "native")]
 pub use composition::{
     ComponentAttachment, CompositionError, ModelComposition, NAMESPACE_SEPARATOR, SceneComposition,
     compose_model, compose_scene, unique_direct_root_body,
@@ -53,10 +55,10 @@ pub use scene::ViewCamera;
 #[cfg(feature = "native")]
 pub use scene::{PhysicsQuantum, Scene, ScenePhase, SceneStep, StateSnapshot, Workspace};
 
-#[cfg(test)]
+#[cfg(all(test, native_qualification))]
 #[path = "tests/component_models.rs"]
 mod component_models;
-#[cfg(all(test, feature = "rendering"))]
+#[cfg(all(test, native_qualification, feature = "rendering"))]
 #[path = "tests/rendering.rs"]
 mod rendering_tests;
 

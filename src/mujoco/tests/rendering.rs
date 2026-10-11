@@ -144,3 +144,110 @@ fn native_root_body_highlights_descendants_without_changing_materials() {
     let restored = workspace.render_viewport(view, [64, 48]).unwrap();
     assert_eq!(ordinary, restored);
 }
+
+/// The bundled default must open legible: a readable checker ground with
+/// balanced lighting at the authored default framing, occupying a real
+/// share of the view instead of a flat over-lit or missed surface.
+/// This is an explicit native qualification check: the default non-graphical
+/// contract does not render pixels.
+/// Bounded same-code checker trial comparison: renders the frozen
+/// baseline (texrepeat 4 4, fixture copy) and the trial default
+/// (texrepeat 3 3, bundled resource) at the identical authored default
+/// camera and resolution, writes both frames as PPM files under
+/// target/checker-trial/ and prints luminance statistics for QA/design
+/// comparison against matched native captures. Offscreen metrics do not
+/// establish native brightness or fidelity acceptance.
+#[test]
+#[cfg(native_qualification)]
+fn checker_trial_renders_baseline_and_trial_for_matched_comparison() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/checker-trial");
+    std::fs::create_dir_all(&dir).unwrap();
+    let write_ppm = |name: &str, rendered: &crate::mujoco::RenderedCamera| {
+        let [w, h] = rendered.resolution();
+        let mut data = format!(
+            "P6
+{w} {h}
+255
+"
+        )
+        .into_bytes();
+        data.extend_from_slice(rendered.rgb());
+        std::fs::write(dir.join(name), data).unwrap();
+    };
+    let stats = |rendered: &crate::mujoco::RenderedCamera| {
+        let rgb = rendered.rgb();
+        let luma = |i: usize| {
+            (f64::from(rgb[3 * i]) + f64::from(rgb[3 * i + 1]) + f64::from(rgb[3 * i + 2])) / 3.0
+        };
+        let pixels: Vec<f64> = (0..rgb.len() / 3).map(luma).collect();
+        let mean = pixels.iter().sum::<f64>() / pixels.len() as f64;
+        let variance =
+            pixels.iter().map(|p| (p - mean) * (p - mean)).sum::<f64>() / pixels.len() as f64;
+        (mean, variance)
+    };
+    let baseline_model = Model::from_file(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/mujoco/tests/fixtures/rendering/checker-baseline.xml"),
+    )
+    .expect("baseline checker fixture");
+    let mut baseline_ws = Workspace::new(&baseline_model).unwrap();
+    let baseline_view = baseline_ws.default_view_camera();
+    let baseline_render = baseline_ws
+        .render_viewport(baseline_view, [640, 480])
+        .unwrap();
+    let (baseline_mean, baseline_var) = stats(&baseline_render);
+    eprintln!("CHECKER_TRIAL baseline mean={baseline_mean:.1} variance={baseline_var:.1}");
+    write_ppm("baseline.ppm", &baseline_render);
+
+    let trial_model = Model::from_xml(crate::document::DEFAULT_SCENE).unwrap();
+    let mut trial_ws = Workspace::new(&trial_model).unwrap();
+    let trial_view = trial_ws.default_view_camera();
+    let trial_render = trial_ws.render_viewport(trial_view, [640, 480]).unwrap();
+    let (trial_mean, trial_var) = stats(&trial_render);
+    eprintln!("CHECKER_TRIAL trial mean={trial_mean:.1} variance={trial_var:.1}");
+    write_ppm("trial.ppm", &trial_render);
+
+    // Both definitions remain legible checker grounds offscreen.
+    assert!(trial_var > 800.0, "trial lost checker contrast");
+    assert!(baseline_var > 800.0, "baseline lost checker contrast");
+}
+
+#[test]
+#[cfg(native_qualification)]
+fn bundled_default_scene_renders_a_legible_checker_ground() {
+    let model = Model::from_xml(crate::document::DEFAULT_SCENE).unwrap();
+    let mut workspace = Workspace::new(&model).unwrap();
+    let view = workspace.default_view_camera();
+    let rendered = workspace.render_viewport(view, [640, 480]).unwrap();
+    let rgb = rendered.rgb();
+    let luma = |i: usize| {
+        (f64::from(rgb[3 * i]) + f64::from(rgb[3 * i + 1]) + f64::from(rgb[3 * i + 2])) / 3.0
+    };
+    let pixels: Vec<f64> = (0..640 * 480).map(luma).collect();
+    let mean = pixels.iter().sum::<f64>() / pixels.len() as f64;
+    let variance =
+        pixels.iter().map(|p| (p - mean) * (p - mean)).sum::<f64>() / pixels.len() as f64;
+    let depth = rendered.depth_m();
+    let occupied = depth[..depth.len() / 2]
+        .iter()
+        .filter(|depth| **depth > 0.0 && **depth < 10.0)
+        .count();
+    assert!(
+        pixels.iter().copied().fold(f64::INFINITY, f64::min) < 90.0,
+        "expected dark checker cells, mean {mean:.1}, variance {variance:.1}"
+    );
+    assert!(
+        pixels.iter().copied().fold(f64::NEG_INFINITY, f64::max) > 150.0,
+        "expected light checker cells, mean {mean:.1}, variance {variance:.1}"
+    );
+    assert!(
+        variance > 800.0,
+        "expected checker contrast, mean {mean:.1}, variance {variance:.1}"
+    );
+    assert!(
+        occupied * 4 > depth.len() / 2,
+        "expected ground depth occupancy, occupied {occupied} of {}",
+        depth.len() / 2
+    );
+    assert!(mean < 220.0, "expected balanced lighting, mean {mean:.1}");
+}

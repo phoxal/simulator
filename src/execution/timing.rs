@@ -17,8 +17,8 @@ impl Pacing {
     }
 }
 
-pub(super) struct Timing {
-    pub(super) mode: Pacing,
+pub(crate) struct Timing {
+    pub(crate) mode: Pacing,
     accumulated: Duration,
     started: Option<Duration>,
     anchor_wall: Duration,
@@ -27,7 +27,7 @@ pub(super) struct Timing {
 }
 
 impl Timing {
-    pub(super) fn new(mode: Pacing) -> Self {
+    pub(crate) fn new(mode: Pacing) -> Self {
         Self {
             mode,
             accumulated: Duration::ZERO,
@@ -38,24 +38,24 @@ impl Timing {
         }
     }
 
-    pub(super) fn wall(&self, now: Duration) -> Duration {
+    pub(crate) fn wall(&self, now: Duration) -> Duration {
         self.accumulated + self.started.map_or(Duration::ZERO, |start| now - start)
     }
 
-    pub(super) fn resume(&mut self, now: Duration, sim: Duration) {
+    pub(crate) fn resume(&mut self, now: Duration, sim: Duration) {
         if self.started.is_none() {
             self.started = Some(now);
             self.reanchor(now, sim);
         }
     }
 
-    pub(super) fn pause(&mut self, now: Duration) {
+    pub(crate) fn pause(&mut self, now: Duration) {
         self.accumulated = self.wall(now);
         self.started = None;
         self.recent.clear();
     }
 
-    pub(super) fn set_mode(&mut self, mode: Pacing, now: Duration, sim: Duration) {
+    pub(crate) fn set_mode(&mut self, mode: Pacing, now: Duration, sim: Duration) {
         if self.mode != mode {
             self.mode = mode;
             self.reanchor(now, sim);
@@ -70,7 +70,7 @@ impl Timing {
     }
 
     /// Delay after completed work; slow hosts never owe additional sleep.
-    pub(super) fn delay(&self, now: Duration, sim: Duration) -> Duration {
+    pub(crate) fn delay(&self, now: Duration, sim: Duration) -> Duration {
         if self.mode == Pacing::Fast || self.started.is_none() {
             return Duration::ZERO;
         }
@@ -80,7 +80,7 @@ impl Timing {
 
     /// Two active-wall seconds, sampled at most ten times per second.
     /// Initial (<100ms), paused and single-step displays have no rate.
-    pub(super) fn speed(&mut self, now: Duration, sim: Duration) -> Option<f64> {
+    pub(crate) fn speed(&mut self, now: Duration, sim: Duration) -> Option<f64> {
         self.started?;
         let wall = self.wall(now);
         if self
@@ -122,6 +122,29 @@ mod tests {
         assert_eq!(timing.delay(ms(1016), ms(1000)), ms(0));
     }
 
+    #[test]
+    fn late_presentation_and_wake_keep_owed_boundaries_without_reanchoring() {
+        let mut timing = Timing::new(Pacing::Realtime);
+        timing.resume(ms(0), ms(0));
+        let mut sim = ms(0);
+        // A 33ms presentation/wake stall owes 17 ordinary 2ms boundaries,
+        // each admitted separately, then sleeps only the remaining 1ms.
+        for _ in 0..17 {
+            assert_eq!(timing.delay(ms(33), sim), Duration::ZERO);
+            sim += ms(2);
+        }
+        assert_eq!(sim, ms(34));
+        assert_eq!(timing.delay(ms(33), sim), ms(1));
+        assert_eq!(timing.delay(ms(40), sim), Duration::ZERO);
+        timing.pause(ms(40));
+        timing.resume(ms(1000), sim);
+        assert_eq!(timing.delay(ms(1000), sim), Duration::ZERO);
+        assert_eq!(timing.delay(ms(1000), sim + ms(2)), ms(2));
+        timing.set_mode(Pacing::Fast, ms(1000), sim);
+        timing.set_mode(Pacing::Realtime, ms(1100), ms(5000));
+        assert_eq!(timing.delay(ms(1100), ms(5002)), ms(2));
+        assert_eq!(timing.speed(ms(1100), ms(5000)), None);
+    }
     #[test]
     fn pause_resume_and_mode_change_discard_debt_but_keep_active_wall() {
         let mut timing = Timing::new(Pacing::Realtime);

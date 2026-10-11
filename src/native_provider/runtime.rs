@@ -42,6 +42,19 @@ pub struct ComponentProvider {
 }
 
 impl ComponentProvider {
+    pub(crate) fn fresh(&self) -> Self {
+        Self {
+            providers: self.providers.clone(),
+            observations: self.observations.clone(),
+            cadence: self.cadence.clone(),
+            observation_facts: self.observation_facts.clone(),
+            actuations: self.actuations.clone(),
+            actuation_facts: self.actuation_facts.clone(),
+            actuation_bindings: self.actuation_bindings.clone(),
+            render_workspace: None,
+        }
+    }
+
     /// Builds and validates a fixed provider against one compiled model.
     pub fn new(
         model: &Model,

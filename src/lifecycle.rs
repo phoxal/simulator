@@ -1,4 +1,5 @@
 //! Simulator-owned supervisor lifetime and terminal reporting.
+use crate::app::{Completion, RunOutcome};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -11,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{Options, Presentation};
 use crate::notice::Notice;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Cleanup {
     supervisor_stop_requested: bool,
     supervisor_exited: bool,
@@ -20,10 +21,11 @@ struct Cleanup {
 }
 
 struct Supervisor {
+    cleanup: Option<Cleanup>,
     child: Child,
     _directory: tempfile::TempDir,
     stderr: Option<crate::process_output::Tail>,
-    display: Option<std::sync::Arc<std::sync::Mutex<crate::desktop::DisplayState>>>,
+    display: Option<std::sync::Arc<std::sync::Mutex<crate::app::RunState>>>,
 }
 
 // Leave time for the supervisor's bounded participant shutdown and its own teardown.
@@ -43,6 +45,9 @@ impl Supervisor {
     }
 
     fn stop_with_timeout(&mut self, timeout: Duration) -> Cleanup {
+        if let Some(cleanup) = &self.cleanup {
+            return cleanup.clone();
+        }
         let mut result = Cleanup {
             supervisor_stop_requested: true,
             supervisor_exited: false,
@@ -86,6 +91,7 @@ impl Supervisor {
                     .map_or(error.clone(), |cause| format!("{cause}; {error}")),
             );
         }
+        self.cleanup = Some(result.clone());
         record_cleanup(&self.display, &result);
         result
     }
@@ -104,14 +110,26 @@ enum Readiness {
     V0 { execution: String },
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum StartupReadiness {
+    Ready,
+    Cancelled,
+}
+
+/// Startup budget shared by readiness waiting and test-owned fixture
+/// readiness holds, so a loaded host cannot fail a fixture that the
+/// owner's own budget still accepts.
+const STARTUP_BUDGET: Duration = Duration::from_secs(30);
 fn wait_ready(
     supervisor: &mut Supervisor,
     file: &Path,
     cancel: &crate::cancellation::Cancellation,
-) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs(30);
+) -> Result<StartupReadiness, String> {
+    let deadline = Instant::now() + STARTUP_BUDGET;
     loop {
-        cancel.check()?;
+        if cancel.is_cancelled() {
+            return Ok(StartupReadiness::Cancelled);
+        }
         if file.is_file() {
             let readiness: Readiness =
                 serde_json::from_slice(&fs::read(file).map_err(|e| e.to_string())?)
@@ -120,12 +138,22 @@ fn wait_ready(
             if execution.is_empty() {
                 return Err("supervisor readiness has no execution identity".into());
             }
-            return Ok(());
+            return Ok(StartupReadiness::Ready);
         }
         if let Some(status) = supervisor.child.try_wait().map_err(|e| e.to_string())? {
             return Err(format!("supervisor exited before readiness: {status}"));
         }
         if Instant::now() >= deadline {
+            #[cfg(test)]
+            {
+                eprintln!(
+                    "QUALIFICATION_READINESS_BOUNDARY pid={} file={} exists={} stderr={:?}",
+                    supervisor.child.id(),
+                    file.display(),
+                    file.exists(),
+                    supervisor.stderr.as_ref().map(|tail| tail.text())
+                );
+            }
             return Err("supervisor readiness timed out after 30 seconds".into());
         }
         std::thread::sleep(Duration::from_millis(25));
@@ -134,34 +162,30 @@ fn wait_ready(
 
 /// Native admission precedes every supervisor launch; cleanup also runs on failures.
 pub(super) fn run(options: Options) -> Result<(), String> {
-    if options.presentation == Presentation::Desktop && !options.probe {
-        return crate::desktop::run(options).map(|_| ());
-    }
     run_owned(options, None).map(|_| ())
 }
 
 pub(super) fn run_owned(
-    mut options: Options,
-    worker: Option<crate::desktop::Worker>,
-) -> Result<Option<SimulatorTerminalEvidence>, String> {
+    options: Options,
+    worker: Option<crate::app::Worker>,
+) -> Result<RunOutcome, String> {
     let cancel = worker
         .as_ref()
         .map(|worker| worker.cancel.clone())
         .unwrap_or_default();
     if cancel.is_cancelled() {
-        return Ok(None);
+        return Ok(RunOutcome::Cancelled);
     }
-    startup_phase(&worker, "Checking runtime");
-    if let Err(error) = crate::native_binding::initialize_with_cancel(&cancel) {
-        if cancel.is_cancelled() && error.details == "Operation cancelled" {
-            return Ok(None);
-        }
-        return cancelled_before_execution(record_notice(&worker, error), &cancel);
+    startup_phase(&worker, crate::app::RunStatus::CheckingEngine);
+    match crate::native_runtime::initialize_with_cancel(&cancel) {
+        Ok(crate::native_runtime::Initialization::Ready) => {}
+        Ok(crate::native_runtime::Initialization::Cancelled) => return Ok(RunOutcome::Cancelled),
+        Err(error) => return Err(record_notice(&worker, error)),
     }
     if cancel.is_cancelled() {
-        return Ok(None);
+        return Ok(RunOutcome::Cancelled);
     }
-    startup_phase(&worker, "Preparing scene");
+    startup_phase(&worker, crate::app::RunStatus::Preparing);
     let facts = crate::bundle::BundleFacts::load(&options.bundle).map_err(|error| {
         record_notice(
             &worker,
@@ -175,28 +199,38 @@ pub(super) fn run_owned(
             ),
         )
     })?;
-    if facts.admitted.target != phoxal::artifact::application::HOST_EXECUTION_TARGET {
-        return Err(format!(
-            "bundle target {} cannot run on {}",
-            facts.admitted.target,
-            phoxal::artifact::application::HOST_EXECUTION_TARGET
-        ));
-    }
-    let prepared = crate::runtime::prepare(&options).map_err(|error| record_notice(&worker, Notice::new(
+    let prepared = crate::runtime::prepare(&options, facts).map_err(|error| record_notice(&worker, Notice::new(
         format!("Scene preparation failed: {}",error.lines().next().unwrap_or("invalid scene")),
         "repair the selected scene, model resources or component model, then reopen this scene and build.",
         format!("Selected scene: {}\nSelected build: {}\n{error}",options.scene.display(),options.bundle.display())
     )))?;
     if cancel.is_cancelled() {
-        return Ok(None);
+        return Ok(RunOutcome::Cancelled);
+    }
+    run_prepared(options, worker, &prepared)
+}
+
+pub(super) fn run_prepared(
+    mut options: Options,
+    worker: Option<crate::app::Worker>,
+    prepared: &crate::runtime::PreparedRun,
+) -> Result<RunOutcome, String> {
+    let cancel = worker
+        .as_ref()
+        .map(|w| w.cancel.clone())
+        .unwrap_or_default();
+    if cancel.is_cancelled() {
+        return Ok(RunOutcome::Cancelled);
     }
     if options.probe {
         return engine(options, worker, prepared);
     }
+    prepared.verify_sources()?;
+    let facts = prepared.bundle();
     let mut supervisor = None;
     let mut result_path: Option<PathBuf> = None;
     if options.connect.is_none() {
-        startup_phase(&worker, "Starting supervisor");
+        startup_phase(&worker, crate::app::RunStatus::StartingSupervisor);
         let directory = tempfile::Builder::new()
             .prefix("phoxal-sim-")
             .tempdir_in("/tmp")
@@ -204,7 +238,7 @@ pub(super) fn run_owned(
         let context = directory.path().join("native-context.json");
         fs::write(
             &context,
-            serde_json::to_vec(&prepared.context).map_err(|e| e.to_string())?,
+            serde_json::to_vec(&prepared.context()).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
         let ready = directory.path().join("ready.json");
@@ -220,7 +254,7 @@ pub(super) fn run_owned(
         if !canonical.starts_with(&facts.root) || !canonical.is_file() {
             return Err("supervisor executable escapes the bundle or is not a file".into());
         }
-        let mut command = Command::new(canonical);
+        let mut command = Command::new(&canonical);
         command
             .arg(&facts.root)
             .arg("--launch-mode")
@@ -253,31 +287,46 @@ pub(super) fn run_owned(
         let mut child = command
             .spawn()
             .map_err(|e| format!("cannot start supervisor: {e}"))?;
+        #[cfg(test)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            eprintln!(
+                "QUALIFICATION_CHILD pid={} executable={} mode={:o}",
+                child.id(),
+                canonical.display(),
+                canonical
+                    .metadata()
+                    .map(|m| m.permissions().mode())
+                    .unwrap_or(0),
+            );
+        }
         let stderr = child
             .stderr
             .take()
             .ok_or("supervisor diagnostic pipe missing")?;
         let mut owner = Supervisor {
+            cleanup: None,
             child,
             _directory: directory,
             stderr: None,
             display: worker.as_ref().map(|worker| worker.display.clone()),
         };
         owner.stderr = Some(crate::process_output::Tail::drain(stderr)?);
-        startup_phase(&worker, "Waiting for supervisor");
-        if let Err(primary) = wait_ready(&mut owner, &ready, &cancel) {
-            startup_phase(&worker, "Stopping");
+        startup_phase(&worker, crate::app::RunStatus::WaitingForSupervisor);
+        let readiness = wait_ready(&mut owner, &ready, &cancel);
+        if !matches!(readiness, Ok(StartupReadiness::Ready)) {
+            let cancelled = matches!(readiness, Ok(StartupReadiness::Cancelled));
+            let primary = readiness
+                .err()
+                .unwrap_or_else(|| "Operation cancelled".into());
+            startup_phase(&worker, crate::app::RunStatus::Stopping);
             let cleanup = owner.stop();
             record_cleanup(
                 &worker.as_ref().map(|worker| worker.display.clone()),
                 &cleanup,
             );
-            if cancel.is_cancelled()
-                && primary == "Operation cancelled"
-                && cleanup.error.is_none()
-                && cleanup.supervisor_exited
-            {
-                return Ok(None);
+            if cancelled && cleanup.error.is_none() && cleanup.supervisor_exited {
+                return Ok(RunOutcome::Cancelled);
             }
             let stderr = owner
                 .stderr
@@ -310,13 +359,13 @@ pub(super) fn run_owned(
     let supervisor_id = options.supervisor_id.clone();
     let run_id = options.run_id.clone();
     let started = Instant::now();
-    startup_phase(&worker, "Connecting");
+    startup_phase(&worker, crate::app::RunStatus::Connecting);
     let display = worker.as_ref().map(|worker| worker.display.clone());
     let mut outcome = engine(options, worker, prepared);
     if let Some(display) = &display
         && let Ok(mut state) = display.lock()
     {
-        state.phase = "Stopping";
+        state.phase = crate::app::RunStatus::Stopping;
         state.stopping = true;
     }
     let cleanup = supervisor
@@ -339,7 +388,7 @@ pub(super) fn run_owned(
     {
         *primary = format!("{primary}\nChild stderr:\n{child_stderr}");
     }
-    let cancelled_startup = cancel.is_cancelled() && matches!(&outcome, Ok(None));
+    let cancelled_startup = cancel.is_cancelled() && matches!(&outcome, Ok(RunOutcome::Cancelled));
     let scenario_result: Result<Option<ScenarioExecutionReport>, String> = result_path
         .filter(|_| !cancelled_startup)
         .map(|path| {
@@ -359,20 +408,31 @@ pub(super) fn run_owned(
             None
         }
     };
-    let terminal = outcome.as_ref().ok().and_then(|e| e.as_ref());
+    let terminal = outcome.as_ref().ok().and_then(RunOutcome::terminal);
     let provider_contract_verified = terminal.is_some_and(|e| {
         let SimulatorTerminalEvidence::V0 {
             provider_contract_verified,
-            outcome,
             requested_steps,
             completed_steps,
             ..
         } = e;
         *provider_contract_verified
             && *requested_steps > 0
-            && (outcome == "success" && completed_steps == requested_steps
+            && (matches!(
+                &outcome,
+                Ok(RunOutcome::Executed {
+                    completion: Completion::Completed,
+                    ..
+                })
+            ) && completed_steps == requested_steps
                 || presentation == Presentation::Desktop
-                    && outcome == "stopped"
+                    && matches!(
+                        &outcome,
+                        Ok(RunOutcome::Executed {
+                            completion: Completion::Stopped,
+                            ..
+                        })
+                    )
                     && completed_steps <= requested_steps)
     });
     let completion = completion_result(
@@ -399,7 +459,7 @@ pub(super) fn run_owned(
     outcome
 }
 
-fn record_notice(worker: &Option<crate::desktop::Worker>, notice: Notice) -> String {
+fn record_notice(worker: &Option<crate::app::Worker>, notice: Notice) -> String {
     if let Some(worker) = worker
         && let Ok(mut state) = worker.display.lock()
     {
@@ -409,7 +469,7 @@ fn record_notice(worker: &Option<crate::desktop::Worker>, notice: Notice) -> Str
 }
 
 fn record_cleanup(
-    display: &Option<std::sync::Arc<std::sync::Mutex<crate::desktop::DisplayState>>>,
+    display: &Option<std::sync::Arc<std::sync::Mutex<crate::app::RunState>>>,
     cleanup: &Cleanup,
 ) {
     if let Some(display) = display
@@ -419,29 +479,17 @@ fn record_cleanup(
     }
 }
 
-fn cancelled_before_execution(
-    error: String,
-    cancel: &crate::cancellation::Cancellation,
-) -> Result<Option<SimulatorTerminalEvidence>, String> {
-    if cancel.is_cancelled() && error == "Operation cancelled" {
-        // Native admission has not launched children or acquired execution authority.
-        Ok(None)
-    } else {
-        Err(error)
-    }
-}
-
-fn startup_phase(worker: &Option<crate::desktop::Worker>, phase: &'static str) {
+fn startup_phase(worker: &Option<crate::app::Worker>, phase: crate::app::RunStatus) {
     if let Some(worker) = worker
         && let Ok(mut state) = worker.display.lock()
     {
         state.phase = phase;
-        state.stopping = phase == "Stopping";
+        state.stopping = phase == crate::app::RunStatus::Stopping;
     }
 }
 
 fn completion_result(
-    outcome: &Result<Option<SimulatorTerminalEvidence>, String>,
+    outcome: &Result<RunOutcome, String>,
     cleanup: &Cleanup,
     provider_contract_verified: bool,
 ) -> Result<(), String> {
@@ -464,9 +512,9 @@ fn completion_result(
 
 fn engine(
     options: Options,
-    worker: Option<crate::desktop::Worker>,
-    prepared: crate::runtime::PreparedNative,
-) -> Result<Option<SimulatorTerminalEvidence>, String> {
+    worker: Option<crate::app::Worker>,
+    prepared: &crate::runtime::PreparedRun,
+) -> Result<RunOutcome, String> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -479,32 +527,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cancellation_does_not_mask_a_native_fault() {
-        let cancel = crate::cancellation::Cancellation::default();
-        cancel.cancel();
-        assert!(
-            cancelled_before_execution("Operation cancelled".into(), &cancel)
-                .unwrap()
-                .is_none()
-        );
-        assert_eq!(
-            cancelled_before_execution("wrong ABI".into(), &cancel).unwrap_err(),
-            "wrong ABI"
-        );
-        assert!(
-            cancelled_before_execution(
-                "Operation cancelled".into(),
-                &crate::cancellation::Cancellation::default()
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
     fn unresolved_cleanup_fences_restart() {
-        let display = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::desktop::DisplayState::default(),
-        ));
+        let display = std::sync::Arc::new(std::sync::Mutex::new(crate::app::RunState::default()));
         let cleanup = Cleanup {
             supervisor_stop_requested: true,
             supervisor_exited: false,
@@ -517,6 +541,7 @@ mod tests {
 
     fn idle_supervisor() -> Supervisor {
         Supervisor {
+            cleanup: None,
             stderr: None,
             display: None,
             child: Command::new("/bin/sleep").arg("60").spawn().unwrap(),
@@ -579,6 +604,7 @@ mod tests {
             .spawn()
             .unwrap();
         let mut supervisor = Supervisor {
+            cleanup: None,
             stderr: None,
             display: None,
             child,
@@ -600,7 +626,7 @@ mod tests {
         assert!(cleanup.supervisor_exited);
         assert!(!cleanup.supervisor_killed);
         assert!(cleanup.error.as_ref().unwrap().contains('7'));
-        let failure = completion_result(&Ok(None), &cleanup, true).unwrap_err();
+        let failure = completion_result(&Ok(RunOutcome::Cancelled), &cleanup, true).unwrap_err();
         assert!(failure.contains("supervisor cleanup failed"));
         assert!(failure.contains('7'));
     }
@@ -627,7 +653,7 @@ mod tests {
         assert!(cleanup.supervisor_killed);
         assert!(cleanup.error.as_ref().unwrap().contains("forced kill"));
         assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
-        assert!(completion_result(&Ok(None), &cleanup, true).is_err());
+        assert!(completion_result(&Ok(RunOutcome::Cancelled), &cleanup, true).is_err());
     }
 
     #[test]
@@ -657,6 +683,7 @@ mod tests {
             .spawn()
             .unwrap();
         let mut supervisor = Supervisor {
+            cleanup: None,
             stderr: None,
             display: None,
             child,
@@ -702,6 +729,7 @@ mod tests {
             let tail = crate::process_output::Tail::drain(child.stderr.take().unwrap()).unwrap();
             let ready = directory.path().join("ready.json");
             let mut owner = Supervisor {
+                cleanup: None,
                 child,
                 _directory: directory,
                 stderr: Some(tail),
@@ -711,39 +739,94 @@ mod tests {
             let controller = if fixture == "supervisor_held" {
                 let signal = cancel.clone();
                 let started = owner._directory.path().join("fixture-started");
+                let pid = pid as i32;
                 Some(std::thread::spawn(move || {
-                    let deadline = Instant::now() + Duration::from_secs(5);
-                    while !started.exists() {
-                        assert!(
-                            Instant::now() < deadline,
-                            "fixture failed to initialize signal handling"
-                        );
+                    // The controller records its outcome instead of
+                    // panicking inside the thread: cleanup below always
+                    // runs, and a startup failure surfaces only after the
+                    // owned boundary completed. The wait also ends when the
+                    // child exits, so an early exit reaches the readiness
+                    // boundary instead of a full startup-budget timeout.
+                    let deadline = Instant::now() + STARTUP_BUDGET;
+                    while !started.exists() && unsafe { libc::kill(pid, 0) } == 0 {
+                        if Instant::now() >= deadline {
+                            return Err(format!(
+                                "fixture did not report startup within {}s (marker: {})",
+                                STARTUP_BUDGET.as_secs(),
+                                started.display()
+                            ));
+                        }
                         std::thread::sleep(Duration::from_millis(10));
                     }
                     signal.cancel();
-                    signal.cancel();
+                    Ok(())
                 }))
             } else {
                 None
             };
-            let primary = wait_ready(&mut owner, &ready, &cancel).unwrap_err();
-            if let Some(controller) = controller {
-                controller.join().unwrap();
-            }
+            let readiness = wait_ready(&mut owner, &ready, &cancel);
+            let controller_outcome = controller.map(|c| c.join().unwrap());
+            // Cleanup is unconditional: even a failed readiness or a
+            // fixture-startup timeout cannot leak the owned child.
             let cleanup = owner.stop();
             assert!(cleanup.supervisor_exited);
             assert!(!cleanup.supervisor_killed);
             assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
             let stderr = owner.stderr.as_ref().unwrap().text();
             if fixture == "supervisor_held" {
-                assert_eq!(primary, "Operation cancelled");
+                assert_eq!(readiness.unwrap(), StartupReadiness::Cancelled);
                 assert!(cleanup.error.is_none());
+                if let Some(Err(startup)) = controller_outcome {
+                    panic!("{startup}");
+                }
             } else {
-                assert!(primary.contains("exited before readiness"));
+                assert!(readiness.unwrap_err().contains("exited before readiness"));
                 assert!(cleanup.error.as_ref().unwrap().contains('7'));
                 assert!(stderr.contains("TEST_SUPERVISOR_FAILURE"));
                 assert!(stderr.len() < 33 * 1024);
             }
+        }
+    }
+}
+
+#[cfg(all(test, native_qualification))]
+mod producer_identity_characterization {
+    use super::*;
+    #[test]
+    fn absent_identity_failures_keep_null_report_fields_and_real_cleanup() {
+        use clap::Parser as _;
+        let scene = std::env::var("PHOXAL_QUALIFICATION_SCENE").unwrap();
+        let build = std::env::var("PHOXAL_QUALIFICATION_BUILD").unwrap();
+        for identity in ["scope", "supervisor_id", "run_id"] {
+            let cli = crate::config::Cli::try_parse_from([
+                "phoxal-simulator",
+                "run",
+                &scene,
+                "--build",
+                &build,
+                "--headless",
+                "--duration",
+                "100ms",
+            ])
+            .unwrap();
+            let Some(crate::config::AppCommand::Run(args)) = cli.command else {
+                panic!()
+            };
+            let mut options = args.into_options();
+            match identity {
+                "scope" => options.scope = None,
+                "supervisor_id" => options.supervisor_id = None,
+                "run_id" => options.run_id = None,
+                _ => unreachable!(),
+            }
+            eprintln!("PRODUCER_IDENTITY_CASE {identity}");
+            let result = run_owned(options, None);
+            assert!(
+                result
+                    .err()
+                    .expect("missing identity must fail")
+                    .contains(&format!("a run requires --{}", identity.replace('_', "-")))
+            );
         }
     }
 }
