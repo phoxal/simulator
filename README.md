@@ -8,7 +8,8 @@ Robot source preparation belongs to cargo-phoxal.
 
 The application links upstream mujoco-rs 6.0.1 with exact MuJoCo 3.12.0.
 The simulator is a development tool distributed only as complete applications through GitHub Releases; the crate is not published to crates.io and `cargo install` is not a supported journey.
-A manually dispatched workflow builds the available targets from one exact source revision and prepares a draft release that a human publishes; the currently published zero-asset `phoxal-simulator-v0.2.4` is refused until a new Cargo.toml version exists.
+A manually dispatched workflow builds the available targets from one exact source revision and prepares a draft release that a human publishes.
+The workflow refuses any already published version, including releases with no assets; another release requires an unused version in `Cargo.toml`.
 The macOS disk image contains the application with its private MuJoCo framework, metadata, notices and an Applications shortcut.
 Linux distribution uses a relocatable per-architecture archive with the executable and its private engine; extract and run `bin/phoxal-simulator`, with a minimal desktop install recipe below.
 Packaging uses `patchelf` on Linux to make the MuJoCo dependency a direct executable-relative path, so a missing private engine cannot silently fall back to a normal system installation.

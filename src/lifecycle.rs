@@ -6,22 +6,17 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::runtime::TerminalEvidence as SimulatorTerminalEvidence;
-use phoxal::artifact::simulation::ScenarioExecutionReport;
-use serde::{Deserialize, Serialize};
+use phoxal::artifact::{
+    installation::SimulatorArtifactSummary,
+    simulation::{ScenarioExecutionReport, SimulationCleanup, SimulationRunReport},
+};
+use serde::Deserialize;
 
 use crate::config::{Options, Presentation};
 use crate::notice::Notice;
 
-#[derive(Clone, Serialize)]
-struct Cleanup {
-    supervisor_stop_requested: bool,
-    supervisor_exited: bool,
-    supervisor_killed: bool,
-    error: Option<String>,
-}
-
 struct Supervisor {
-    cleanup: Option<Cleanup>,
+    cleanup: Option<SimulationCleanup>,
     child: Child,
     _directory: tempfile::TempDir,
     stderr: Option<crate::process_output::Tail>,
@@ -40,15 +35,15 @@ fn successful_exit(status: ExitStatus) -> Result<(), String> {
 }
 
 impl Supervisor {
-    fn stop(&mut self) -> Cleanup {
+    fn stop(&mut self) -> SimulationCleanup {
         self.stop_with_timeout(SUPERVISOR_SHUTDOWN_GRACE)
     }
 
-    fn stop_with_timeout(&mut self, timeout: Duration) -> Cleanup {
+    fn stop_with_timeout(&mut self, timeout: Duration) -> SimulationCleanup {
         if let Some(cleanup) = &self.cleanup {
             return cleanup.clone();
         }
-        let mut result = Cleanup {
+        let mut result = SimulationCleanup {
             supervisor_stop_requested: true,
             supervisor_exited: false,
             supervisor_killed: false,
@@ -371,7 +366,7 @@ pub(super) fn run_prepared(
     let cleanup = supervisor
         .as_mut()
         .map(Supervisor::stop)
-        .unwrap_or(Cleanup {
+        .unwrap_or(SimulationCleanup {
             supervisor_stop_requested: false,
             supervisor_exited: true,
             supervisor_killed: false,
@@ -441,16 +436,33 @@ pub(super) fn run_prepared(
         provider_contract_verified || cancelled_startup,
     );
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    let report = serde_json::json!({
-        "schema":"phoxal/simulation-run/v0", "scene":scene, "bundle":bundle,
-        "simulator":{"package":env!("CARGO_PKG_NAME"),"version":env!("CARGO_PKG_VERSION"),"binary":"phoxal-simulator","source":"installed-executable","executable":executable},
-        "scope":scope,"supervisor_id":supervisor_id,"run_id":run_id,"supervisor_ready":true,
-        "provider_contract_verified":provider_contract_verified,"simulator_exit_code":if completion.is_ok(){0}else{1},
-        "simulator_wall_time_ns":u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
-        "simulator_stdout":terminal.map(serde_json::to_string).transpose().map_err(|e|e.to_string())?.unwrap_or_default(),
-        "simulator_stderr":completion.as_ref().err().cloned().unwrap_or_default(),
-        "cleanup":cleanup,"scenario":scenario,"terminal":terminal
-    });
+    let report = SimulationRunReport::V0 {
+        scene,
+        bundle,
+        simulator: SimulatorArtifactSummary {
+            package: env!("CARGO_PKG_NAME").into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            binary: "phoxal-simulator".into(),
+            source: "installed-executable".into(),
+            executable,
+        },
+        scope,
+        supervisor_id,
+        run_id,
+        supervisor_ready: true,
+        provider_contract_verified,
+        simulator_exit_code: Some(if completion.is_ok() { 0 } else { 1 }),
+        simulator_wall_time_ns: u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
+        simulator_stdout: terminal
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default(),
+        simulator_stderr: completion.as_ref().err().cloned().unwrap_or_default(),
+        cleanup,
+        scenario,
+        terminal,
+    };
     println!(
         "{}",
         serde_json::to_string(&report).map_err(|e| e.to_string())?
@@ -470,7 +482,7 @@ fn record_notice(worker: &Option<crate::app::Worker>, notice: Notice) -> String 
 
 fn record_cleanup(
     display: &Option<std::sync::Arc<std::sync::Mutex<crate::app::RunState>>>,
-    cleanup: &Cleanup,
+    cleanup: &SimulationCleanup,
 ) {
     if let Some(display) = display
         && let Ok(mut state) = display.lock()
@@ -490,7 +502,7 @@ fn startup_phase(worker: &Option<crate::app::Worker>, phase: crate::app::RunStat
 
 fn completion_result(
     outcome: &Result<RunOutcome, String>,
-    cleanup: &Cleanup,
+    cleanup: &SimulationCleanup,
     provider_contract_verified: bool,
 ) -> Result<(), String> {
     let mut errors = Vec::new();
@@ -529,7 +541,7 @@ mod tests {
     #[test]
     fn unresolved_cleanup_fences_restart() {
         let display = std::sync::Arc::new(std::sync::Mutex::new(crate::app::RunState::default()));
-        let cleanup = Cleanup {
+        let cleanup = SimulationCleanup {
             supervisor_stop_requested: true,
             supervisor_exited: false,
             supervisor_killed: false,
@@ -658,7 +670,7 @@ mod tests {
 
     #[test]
     fn final_outcome_retains_engine_and_cleanup_failures() {
-        let cleanup = Cleanup {
+        let cleanup = SimulationCleanup {
             supervisor_stop_requested: true,
             supervisor_exited: true,
             supervisor_killed: true,
