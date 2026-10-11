@@ -4,8 +4,8 @@
 use super::cgl::Context;
 #[cfg(target_os = "linux")]
 use super::egl::Context;
-use crate::native_binding::wrappers::mj_model::traits::ModelType;
-use crate::native_binding::{
+use mujoco_rs::wrappers::mj_model::traits::ModelType;
+use mujoco_rs::{
     prelude::MjData,
     wrappers::{
         MjModel,
@@ -106,7 +106,7 @@ impl CameraRenderer {
         &self,
         data: &mut MjData<M>,
         xy: [f64; 2],
-    ) -> crate::native_binding::wrappers::mj_visualization::SceneSelection {
+    ) -> mujoco_rs::wrappers::mj_visualization::SceneSelection {
         self.scene.find_selection(
             data,
             &MjvOption::default(),
@@ -125,8 +125,7 @@ impl CameraRenderer {
         // SAFETY: only color/emission in the bounded, renderer-owned abstract geom
         // buffer is changed. No pointers, lengths, model materials or physics change.
         for (index, geom) in unsafe { self.scene.geoms_mut() }.iter_mut().enumerate() {
-            let Some(owner) = (geom.objtype
-                == crate::native_binding::prelude::MjtObj::mjOBJ_GEOM as i32
+            let Some(owner) = (geom.objtype == mujoco_rs::prelude::MjtObj::mjOBJ_GEOM as i32
                 && geom.objid >= 0)
                 .then(|| model.geom_bodyid().get(geom.objid as usize).copied())
                 .flatten()

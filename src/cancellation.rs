@@ -23,14 +23,6 @@ impl Cancellation {
         self.0.cancelled.load(Ordering::Acquire)
     }
 
-    pub(crate) fn check(&self) -> Result<(), String> {
-        if self.is_cancelled() {
-            Err("Operation cancelled".into())
-        } else {
-            Ok(())
-        }
-    }
-
     pub(crate) async fn wait(&self) {
         loop {
             let changed = self.0.changed.notified();

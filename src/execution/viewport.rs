@@ -1,14 +1,51 @@
 //! Worker-owned native view, selection and rendering on copied state only.
-use crate::desktop::{
-    DisplayState,
+use crate::app::{
+    RunState,
     scene::{FrameIdentity, PresentedView, SceneAction, SceneEpoch, SceneResult, ViewportFrame},
 };
 use crate::mujoco::{Model, NativeSelection, StateSnapshot, ViewCamera, Workspace};
 use std::sync::{Arc, Mutex};
 
-pub(super) struct Viewport {
+/// Shared render budget for every presented viewport frame.
+const RENDER_BUDGET: [usize; 2] = [1024, 768];
+
+/// Fits a render resolution inside the model's offscreen framebuffer and the
+/// shared pixel budget. Without a requested size it uses the framebuffer's
+/// own aspect; with one it preserves the requested viewport aspect so the
+/// world fills the presentation area without stretching or cropping.
+fn fitted_resolution(workspace: &Workspace, requested: Option<[f32; 2]>) -> [usize; 2] {
+    let [width, height] = workspace.framebuffer_resolution();
+    let budgeted = [
+        width.min(RENDER_BUDGET[0]).max(1),
+        height.min(RENDER_BUDGET[1]).max(1),
+    ];
+    let Some([requested_width, requested_height]) = requested else {
+        return budgeted;
+    };
+    if !requested_width.is_finite()
+        || !requested_height.is_finite()
+        || requested_width <= 0.
+        || requested_height <= 0.
+    {
+        return budgeted;
+    }
+    let aspect = f64::from(requested_width) / f64::from(requested_height);
+    let mut fitted_width = budgeted[0] as f64;
+    let mut fitted_height = fitted_width / aspect;
+    if fitted_height > budgeted[1] as f64 {
+        fitted_height = budgeted[1] as f64;
+        fitted_width = fitted_height * aspect;
+    }
+    [
+        (fitted_width.round() as usize).clamp(1, budgeted[0]),
+        (fitted_height.round() as usize).clamp(1, budgeted[1]),
+    ]
+}
+
+pub(crate) struct Viewport {
     workspace: Workspace,
     pub camera: ViewCamera,
+    resolution: [usize; 2],
     epoch: SceneEpoch,
     serial: u64,
     selected: Option<NativeSelection>,
@@ -16,8 +53,10 @@ pub(super) struct Viewport {
 impl Viewport {
     pub fn new(model: &Model, execution: &str, generation: u64) -> Result<Self, String> {
         let workspace = Workspace::new(model).map_err(|e| e.to_string())?;
+        let resolution = fitted_resolution(&workspace, None);
         Ok(Self {
             camera: workspace.default_view_camera(),
+            resolution,
             workspace,
             epoch: SceneEpoch {
                 execution: execution.into(),
@@ -28,35 +67,54 @@ impl Viewport {
             selected: None,
         })
     }
-    pub fn reset(
-        &mut self,
-        generation: u64,
-        display: &Arc<Mutex<DisplayState>>,
-    ) -> Result<(), String> {
+    pub fn select_body(&mut self, body: usize, snapshot: &StateSnapshot) -> Result<(), String> {
+        if snapshot.model_identity() != self.epoch.model {
+            return Err("selection belongs to another native model".into());
+        }
+        let point = *snapshot
+            .body_positions()
+            .get(body)
+            .ok_or("native selection body is unavailable")?;
+        self.selected = Some(NativeSelection {
+            body,
+            geom: None,
+            point,
+        });
+        Ok(())
+    }
+    pub fn reset(&mut self, generation: u64, display: &Arc<Mutex<RunState>>) -> Result<(), String> {
         self.epoch.generation = generation;
         self.selected = None;
         let mut state = display.lock().map_err(|_| "desktop state lock poisoned")?;
         state.frame = None;
-        state.presented = None;
-        state.pending_camera = None;
-        state.pending_scene = None;
+        state.requests.presented = None;
+        state.requests.pending_camera = None;
+        state.requests.pending_scene = None;
         state.selection = None;
         state.scene_result = None;
         Ok(())
     }
-    pub fn input(&mut self, display: &Arc<Mutex<DisplayState>>) -> Result<bool, String> {
-        let (camera, request, presented) = {
+    pub fn input(&mut self, display: &Arc<Mutex<RunState>>) -> Result<bool, String> {
+        let (camera, request, presented, viewport_size) = {
             let mut state = display.lock().map_err(|_| "desktop state lock poisoned")?;
             (
-                state.pending_camera.take(),
-                state.pending_scene.take(),
-                state.presented.clone(),
+                state.requests.pending_camera.take(),
+                state.requests.pending_scene.take(),
+                state.requests.presented.clone(),
+                state.requests.viewport_size.take(),
             )
         };
         let mut changed = false;
+        if let Some(size) = viewport_size {
+            let fitted = fitted_resolution(&self.workspace, Some(size));
+            if fitted != self.resolution {
+                self.resolution = fitted;
+                changed = true;
+            }
+        }
         if let Some(request) = camera
             && request.epoch == self.epoch
-            && crate::desktop::viewport::valid_camera(request.camera)
+            && crate::app::scene::valid_camera(request.camera)
         {
             self.camera = request.camera;
             changed = true;
@@ -76,13 +134,7 @@ impl Viewport {
                             .map_err(|e| e.to_string())?
                     }
                     SceneAction::SelectBody(body) => {
-                        if let Some(point) = view.snapshot.body_positions().get(body) {
-                            self.selected = Some(NativeSelection {
-                                body,
-                                geom: None,
-                                point: *point,
-                            });
-                        }
+                        self.select_body(body, &view.snapshot)?;
                     }
                     SceneAction::Clear => self.selected = None,
                     SceneAction::Focus => {
@@ -117,7 +169,7 @@ impl Viewport {
     }
     pub fn drag_anchor(
         &mut self,
-        begin: &crate::desktop::scene::DragBegin,
+        begin: &crate::app::scene::DragBegin,
         presented: &PresentedView,
     ) -> Result<(usize, [f64; 3], ViewCamera), String> {
         if begin.frame.epoch != self.epoch
@@ -158,12 +210,7 @@ impl Viewport {
     }
     pub fn render(&mut self, snapshot: &StateSnapshot) -> Result<ViewportFrame, String> {
         self.sync(snapshot)?;
-        let [width, height] = self.workspace.framebuffer_resolution();
-        let ratio = (1024.0 / width as f64).min(768.0 / height as f64).min(1.0);
-        let resolution = [
-            (width as f64 * ratio) as usize,
-            (height as f64 * ratio) as usize,
-        ];
+        let resolution = self.resolution;
         let image = self
             .workspace
             .render_viewport_selected(
@@ -189,7 +236,21 @@ impl Viewport {
             }),
         })
     }
-    pub fn publish(&self, state: &mut DisplayState) {
+    pub fn publish(&self, state: &mut RunState) {
+        // The authoritative execution viewport supersedes presentations
+        // from a different epoch, such as the document world held before a
+        // run replaced it. Without this invalidation the stale presented
+        // epoch blocks the fresh execution frame at RunState::request and
+        // keeps camera input and selection bound to the old identity.
+        if state
+            .requests
+            .presented
+            .as_ref()
+            .is_some_and(|view| view.identity.epoch != self.epoch)
+        {
+            state.requests.presented = None;
+        }
+        state.robot_root = self.workspace.model().robot_root();
         if state.bodies.is_empty() {
             state.bodies = self.workspace.scene_bodies().into();
         }
@@ -198,15 +259,15 @@ impl Viewport {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, native_qualification))]
 mod tests {
     use super::*;
-    use crate::desktop::scene::{CameraRequest, SceneRequest};
+    use crate::app::scene::{CameraRequest, SceneRequest};
     const XML: &str = r#"<mujoco><visual><global offwidth="320" offheight="240"/></visual><worldbody>
         <body name="fixed" pos="3 0 0"><geom type="sphere" size="0.2"/></body>
         <body name="ball"><freejoint/><geom type="sphere" size="0.4" rgba="0.2 0.6 0.9 1"/></body>
         </worldbody></mujoco>"#;
-    fn prepared() -> (Viewport, StateSnapshot, Arc<Mutex<DisplayState>>) {
+    fn prepared() -> (Viewport, StateSnapshot, Arc<Mutex<RunState>>) {
         let model = Model::from_xml(XML).unwrap();
         let snapshot = Workspace::new(&model).unwrap().snapshot().unwrap();
         let mut owner = Viewport::new(&model, "execution-a", 0).unwrap();
@@ -217,16 +278,21 @@ mod tests {
             elevation: 0.0,
         };
         let frame = owner.render(&snapshot).unwrap();
-        let state = Arc::new(Mutex::new(DisplayState {
-            presented: Some(frame.view),
-            ..Default::default()
+        let state = Arc::new(Mutex::new(RunState {
+            snapshot: crate::app::RunSnapshot {
+                ..Default::default()
+            },
+            requests: crate::app::RunRequests {
+                presented: Some(frame.view),
+                ..Default::default()
+            },
         }));
         (owner, snapshot, state)
     }
-    fn request(display: &Arc<Mutex<DisplayState>>, action: SceneAction) {
+    fn request(display: &Arc<Mutex<RunState>>, action: SceneAction) {
         let mut state = display.lock().unwrap();
-        state.pending_scene = Some(SceneRequest {
-            frame: state.presented.as_ref().unwrap().identity.clone(),
+        state.requests.pending_scene = Some(SceneRequest {
+            frame: state.requests.presented.as_ref().unwrap().identity.clone(),
             action,
         });
     }
@@ -235,8 +301,8 @@ mod tests {
         let (mut owner, _, display) = prepared();
         request(&display, SceneAction::SelectBody(2));
         owner.input(&display).unwrap();
-        let view = display.lock().unwrap().presented.clone().unwrap();
-        let begin = crate::desktop::scene::DragBegin {
+        let view = display.lock().unwrap().requests.presented.clone().unwrap();
+        let begin = crate::app::scene::DragBegin {
             id: 1,
             frame: view.identity.clone(),
             xy: [0.5; 2],
@@ -284,7 +350,7 @@ mod tests {
         request(&display, SceneAction::Pick([0.0, 0.0]));
         assert!(!owner.input(&display).unwrap());
         assert!(display.lock().unwrap().scene_result.as_ref().unwrap().stale);
-        display.lock().unwrap().presented = Some(owner.render(&snapshot).unwrap().view);
+        display.lock().unwrap().requests.presented = Some(owner.render(&snapshot).unwrap().view);
         request(&display, SceneAction::Pick([0.0, 0.0]));
         owner.input(&display).unwrap();
         assert!(owner.selected.is_none());
@@ -322,7 +388,7 @@ mod tests {
         for alter in 0..4 {
             request(&display, SceneAction::Pick([0.5, 0.5]));
             let mut state = display.lock().unwrap();
-            let identity = &mut state.pending_scene.as_mut().unwrap().frame;
+            let identity = &mut state.requests.pending_scene.as_mut().unwrap().frame;
             match alter {
                 0 => identity.epoch.generation += 1,
                 1 => identity.epoch.execution = "old-execution".into(),
@@ -336,34 +402,122 @@ mod tests {
         let mut camera = owner.camera;
         for index in 0..10000 {
             camera.azimuth = f64::from(index % 360);
-            display.lock().unwrap().pending_camera = Some(CameraRequest {
+            display.lock().unwrap().requests.pending_camera = Some(CameraRequest {
                 epoch: owner.epoch.clone(),
                 camera,
             });
         }
         owner.input(&display).unwrap();
         assert_eq!(owner.camera, camera);
-        assert!(display.lock().unwrap().pending_camera.is_none());
-        display.lock().unwrap().presented = Some(owner.render(&snapshot).unwrap().view);
+        assert!(display.lock().unwrap().requests.pending_camera.is_none());
+        display.lock().unwrap().requests.presented = Some(owner.render(&snapshot).unwrap().view);
         request(&display, SceneAction::SelectBody(1));
         owner.input(&display).unwrap();
         assert_eq!(owner.selected.as_ref().unwrap().body, 1);
         request(&display, SceneAction::Clear);
         owner.input(&display).unwrap();
         assert!(owner.selected.is_none());
-        let old = display.lock().unwrap().presented.clone().unwrap();
+        let old = display.lock().unwrap().requests.presented.clone().unwrap();
         owner.reset(1, &display).unwrap();
-        assert!(display.lock().unwrap().presented.is_none());
+        assert!(display.lock().unwrap().requests.presented.is_none());
         // Even explicitly reintroduced old UI data cannot cross reset.
-        display.lock().unwrap().presented = Some(old.clone());
+        display.lock().unwrap().requests.presented = Some(old.clone());
         request(&display, SceneAction::SelectBody(2));
         assert!(!owner.input(&display).unwrap());
         let replacement = Viewport::new(owner.workspace.model(), "execution-b", 0).unwrap();
-        assert!(display.lock().unwrap().pending_scene.is_none());
+        assert!(display.lock().unwrap().requests.pending_scene.is_none());
         let stale = SceneRequest {
             frame: old.identity.clone(),
             action: SceneAction::Clear,
         };
         assert!(!stale.matches(&replacement.epoch, &old, replacement.camera));
+    }
+    #[test]
+    fn render_resolution_follows_requested_aspect_within_framebuffer_and_budget() {
+        let (mut owner, snapshot, display) = prepared();
+        // Without a request the model framebuffer's own aspect is used.
+        let initial = owner.render(&snapshot).unwrap();
+        assert_eq!(initial.view.resolution, [320, 240]);
+        // A materially wider viewport keeps its aspect inside the framebuffer.
+        {
+            let mut state = display.lock().unwrap();
+            state.requests.viewport_size = Some([800., 400.]);
+        }
+        assert!(owner.input(&display).unwrap());
+        let wide = owner.render(&snapshot).unwrap();
+        assert_eq!(wide.view.resolution, [320, 160]);
+        // Resize chatter that fits the same fitted resolution changes nothing.
+        {
+            let mut state = display.lock().unwrap();
+            state.requests.viewport_size = Some([801.6, 400.8]);
+        }
+        assert!(!owner.input(&display).unwrap());
+        assert_eq!(owner.render(&snapshot).unwrap().view.resolution, [320, 160]);
+        // A materially taller viewport keeps its aspect.
+        {
+            let mut state = display.lock().unwrap();
+            state.requests.viewport_size = Some([400., 800.]);
+        }
+        owner.input(&display).unwrap();
+        let tall = owner.render(&snapshot).unwrap();
+        assert_eq!(tall.view.resolution, [120, 240]);
+        // Degenerate sizes fall back to the framebuffer aspect. The guard
+        // must not live across input(), which locks the same state.
+        for size in [[0., 0.], [f32::NAN, 10.], [10., f32::INFINITY]] {
+            display.lock().unwrap().requests.viewport_size = Some(size);
+            owner.input(&display).unwrap();
+        }
+        assert_eq!(owner.render(&snapshot).unwrap().view.resolution, [320, 240]);
+    }
+    #[test]
+    fn resize_during_outstanding_pick_and_drag_keeps_fences_without_canceling() {
+        let (mut owner, snapshot, display) = prepared();
+        let presented = owner.render(&snapshot).unwrap();
+        // The desktop only forwards picks for frames it has actually
+        // presented, so publish the first frame before starting the gesture.
+        display.lock().unwrap().requests.presented = Some(presented.view.clone());
+        let begin = crate::app::scene::DragBegin {
+            id: 7,
+            frame: presented.view.identity.clone(),
+            xy: [0.5; 2],
+            received: std::time::Instant::now(),
+        };
+        {
+            let mut state = display.lock().unwrap();
+            state.requests.drag_mailbox.begin = Some(begin.clone());
+            state.requests.pending_scene = Some(SceneRequest {
+                frame: presented.view.identity.clone(),
+                action: SceneAction::Pick([0.5, 0.5]),
+            });
+            state.requests.viewport_size = Some([800., 400.]);
+        }
+        owner.input(&display).unwrap();
+        // The outstanding pick was validated against the frame it targeted.
+        assert_eq!(owner.selected.as_ref().unwrap().body, 2);
+        // A new frame with a different resolution does not cancel the gesture:
+        // the drag still anchors on its original frame identity.
+        let anchor = owner.drag_anchor(
+            &begin,
+            &display.lock().unwrap().requests.presented.clone().unwrap(),
+        );
+        assert!(anchor.is_ok());
+        let resized = owner.render(&snapshot).unwrap();
+        assert_eq!(resized.view.resolution, [320, 160]);
+        assert_ne!(resized.view.identity, presented.view.identity);
+        // A pick enqueued against the frame the desktop has already left
+        // behind is stale after the resize render: the request carries the
+        // old presented identity while the display presents the new frame.
+        request(&display, SceneAction::Pick([0.0, 0.0]));
+        {
+            let mut state = display.lock().unwrap();
+            state.requests.presented = Some(resized.view.clone());
+            state.requests.viewport_size = Some([1200., 800.]);
+        }
+        owner.input(&display).unwrap();
+        assert!(display.lock().unwrap().scene_result.as_ref().unwrap().stale);
+        // A fresh press against the new frame stays fenced to its identity.
+        request(&display, SceneAction::SelectBody(2));
+        owner.input(&display).unwrap();
+        assert_eq!(owner.selected.as_ref().unwrap().body, 2);
     }
 }

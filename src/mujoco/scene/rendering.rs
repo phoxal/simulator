@@ -2,7 +2,7 @@
 
 use super::{Workspace, renderer::CameraRenderer};
 use crate::mujoco::{CameraHandle, WorkspaceError};
-use crate::native_binding::wrappers::mj_visualization::MjvCamera;
+use mujoco_rs::wrappers::mj_visualization::MjvCamera;
 
 // RGB + depth storage is at most 28 MiB per renderer, before the copied result.
 const MAX_PIXELS: usize = 4 * 1024 * 1024;
@@ -35,6 +35,15 @@ pub struct RenderedCamera {
 }
 
 impl RenderedCamera {
+    /// Test-only construction of a rendered frame without a GPU.
+    #[cfg(test)]
+    pub(crate) fn from_parts(resolution: [usize; 2], rgb: Box<[u8]>, depth_m: Box<[f32]>) -> Self {
+        Self {
+            resolution,
+            rgb,
+            depth_m,
+        }
+    }
     /// Returns `[width, height]` in pixels.
     #[must_use]
     pub const fn resolution(&self) -> [usize; 2] {
@@ -194,7 +203,7 @@ impl Workspace {
         (0..model.nbody() as usize)
             .map(|id| {
                 let name = model
-                    .id_to_name(crate::native_binding::prelude::MjtObj::mjOBJ_BODY, id)
+                    .id_to_name(mujoco_rs::prelude::MjtObj::mjOBJ_BODY, id)
                     .unwrap_or("")
                     .to_owned();
                 let joint = model.body_jntadr()[id];
@@ -202,8 +211,7 @@ impl Workspace {
                     BodyMobility::Fixed
                 } else if model.body_jntnum()[id] == 1
                     && joint >= 0
-                    && model.jnt_type()[joint as usize]
-                        == crate::native_binding::prelude::MjtJoint::mjJNT_FREE
+                    && model.jnt_type()[joint as usize] == mujoco_rs::prelude::MjtJoint::mjJNT_FREE
                 {
                     BodyMobility::FreeJoint
                 } else {

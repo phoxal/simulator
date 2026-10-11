@@ -1,7 +1,7 @@
 //! Simulator-owned translation perturbation, never a second authoritative world.
 use super::{Scene, Workspace};
 use crate::mujoco::ViewCamera;
-use crate::native_binding::{
+use mujoco_rs::{
     mujoco_c,
     wrappers::mj_visualization::{MjtPertBit, MjvCamera, MjvOption, MjvPerturb, MjvScene},
 };
@@ -270,7 +270,7 @@ impl Scene {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, native_qualification))]
 mod tests {
     use super::*;
     use crate::mujoco::Model;
@@ -289,6 +289,25 @@ mod tests {
             distance: 3.0,
             azimuth: 90.0,
             elevation: -20.0,
+        }
+    }
+    #[test]
+    fn fixed_body_manipulation_refusal_preserves_authoritative_state() {
+        let mut scene = scene();
+        let before = scene.snapshot().unwrap();
+        for (paused, reason) in [
+            (false, "selected native body is fixed"),
+            (
+                true,
+                "paused translation requires the selected body's own free joint",
+            ),
+        ] {
+            assert_eq!(
+                scene.drag_begin(1, [3.0, 0.0, 0.0], camera(), paused),
+                Err(reason.into())
+            );
+            assert!(scene.drag.is_none());
+            assert_eq!(scene.snapshot().unwrap(), before);
         }
     }
     #[test]
@@ -356,7 +375,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, native_qualification))]
 mod deadline_tests {
     use super::*;
     use crate::mujoco::Model;
@@ -388,7 +407,7 @@ mod deadline_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, native_qualification))]
 mod constraint_tests {
     use super::*;
     #[test]

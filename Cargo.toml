@@ -1,13 +1,15 @@
 [package]
 name = "phoxal-simulator"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 build = "build.rs"
 rust-version = "1.95"
 license = "AGPL-3.0-only"
-publish = true
+# Application-only distribution through GitHub Releases; the crate is not
+# published to crates.io and `cargo install` is not a supported journey.
+publish = false
 description = "Independent Phoxal MuJoCo simulator application."
-documentation = "https://docs.rs/phoxal-simulator"
+documentation = "https://github.com/phoxal/simulator#readme"
 homepage = "https://github.com/phoxal/simulator"
 repository = "https://github.com/phoxal/simulator"
 
@@ -16,24 +18,34 @@ name = "phoxal-simulator"
 path = "src/main.rs"
 required-features = ["rendering"]
 
+# Explicit host qualification is opt-in; ordinary cargo test discovers every
+# non-graphical test without executing graphics or real robot fixtures.
+[[test]]
+name = "native_qualification"
+path = "tests/native_qualification.rs"
+test = false
+
+[[test]]
+name = "native_external_source"
+path = "tests/native_external_source.rs"
+test = false
+
 [features]
 default = ["rendering"]
 # Rendering is the application's default presentation support.
-# Native operations load the external MuJoCo library at runtime.
+# Native operations link the exact private MuJoCo engine supplied with the application.
 native = []
 rendering = ["native", "dep:cgl", "dep:glutin"]
 
 [dependencies]
 humantime = "2.3.0"
-libloading = "0.9"
+mujoco-rs = "=6.0.1"
 libc = "0.2"
-bytemuck = { version = "1.25.2", features = ["min_const_generics", "must_cast"] }
-paste = "1.0.15"
-log = "0.4"
 clap = { version = "4.6.1", features = ["derive"] }
 phoxal = { version = "0.71.0", default-features = false, features = ["session", "runtime"] }
 
 prost = "0.14.4"
+quick-xml = "0.41.0"
 
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.149"
@@ -41,11 +53,8 @@ sha2 = "0.10.9"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "signal", "sync", "net"] }
 thiserror = "2.0.18"
 eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-flate2 = "1"
-tar = "0.4"
-fs2 = "0.4"
 rfd = "0.17.2"
+egui_extras = { version = "0.36", features = ["svg"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cgl = { version = "0.3.2", optional = true }
@@ -57,11 +66,5 @@ glutin = { version = "0.32.3", default-features = false, features = ["egl"], opt
 [dependencies.tempfile]
 version = "3"
 
-[build-dependencies]
-syn = { version = "2", features = ["full"] }
-quote = "1"
-prettyplease = "0.2"
-
-[package.metadata.cargo-machete]
-# The package-local ABI generator uses these directly in build.rs.
-ignored = ["syn", "quote", "prettyplease"]
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(native_qualification)', 'cfg(external_source_qualification)'] }

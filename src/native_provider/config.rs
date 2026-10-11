@@ -55,7 +55,7 @@ pub struct ActuationDeclaration {
     pub targets: Vec<ActuatorTarget>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, native_qualification))]
 impl ActuationDeclaration {
     /// Creates the official motion actuator output binding.
     #[must_use]

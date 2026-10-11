@@ -1,0 +1,31 @@
+<mujoco model="default">
+    <option timestep="0.002" gravity="0 0 -9.81"/>
+
+    <!-- The default free camera frames this center and extent, so the
+         bundled world opens on the mounting area at a useful scale. -->
+    <statistic center="0 0 0.4" extent="3.2"/>
+
+    <visual>
+        <headlight ambient="0.32 0.32 0.32" diffuse="0.18 0.18 0.18" specular="0.03 0.03 0.03"/>
+        <global azimuth="135" elevation="-38" offwidth="1024" offheight="768"/>
+    </visual>
+
+    <asset>
+        <texture name="ground" type="2d" builtin="checker"
+                 rgb1="0.30 0.34 0.36" rgb2="0.58 0.63 0.65"
+                 width="256" height="256"/>
+        <material name="ground" texture="ground" texuniform="true"
+                  texrepeat="3 3" specular="0.05" shininess="0.1" reflectance="0.08"/>
+    </asset>
+
+    <worldbody>
+        <geom name="floor"
+              type="plane"
+              size="10 10 0.1"
+              material="ground"/>
+
+        <light pos="0 0 5"/>
+
+        <site name="robot_mount" pos="0 0 0" size="0.01" rgba="0 0 0 0"/>
+    </worldbody>
+</mujoco>

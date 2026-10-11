@@ -4,9 +4,12 @@
 __pycache__/
 
 # Local-only maintainer files.
-# The .local-mujoco shim wraps the macOS framework layout so mujoco-rs can find
-# `libmujoco.dylib` on a host without pkg-config.
+# .local-mujoco holds the one-time provisioned private engine root used by
+# ordinary source builds (see README "Contributor source builds").
 /rust-toolchain.toml
 /.local-mujoco/
 /.cargo/config.local.toml
 .DS_Store
+
+# CI moves the provisioned engine here before extracted-package smoke.
+/.release-mujoco/

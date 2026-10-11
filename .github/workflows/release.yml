@@ -1,0 +1,169 @@
+# Application release: builds complete simulator applications for the
+# available targets from one exact source revision and prepares a draft
+# GitHub Release for human publication. Manual download and install is the
+# only distribution path; artifacts carry ad-hoc signatures, and no signing,
+# notarization credential is required. The standard GitHub token prepares the draft.
+name: App release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: simulator-app-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  resolve:
+    name: Resolve version and source
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      source_sha256: ${{ steps.resolve.outputs.source_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve exact version, tag and source checksum
+        id: resolve
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          [ -n "$version" ] || { echo "::error::no Cargo.toml version"; exit 1; }
+          sha="$(git rev-parse HEAD)"
+          source_sha256=$(git archive --format=tar.gz "$sha" | shasum -a 256 | cut -d' ' -f1)
+          {
+            echo "version=$version"
+            echo "tag=phoxal-simulator-v$version"
+            echo "sha=$sha"
+            echo "source_sha256=$source_sha256"
+          } >> "$GITHUB_OUTPUT"
+      - name: Refuse an existing published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash .github/scripts/release-policy.sh guard '${{ steps.resolve.outputs.version }}' '${{ steps.resolve.outputs.sha }}'
+
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      SHA: ${{ needs.resolve.outputs.sha }}
+      SOURCE_SHA256: ${{ needs.resolve.outputs.source_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1-mesa-dev libgl1-mesa-dev libxkbcommon-dev libwayland-dev patchelf
+      - name: Provision the checksum-pinned private engine
+        run: |
+          bash .github/scripts/provision-mujoco.sh '${{ matrix.target }}' "$RUNNER_TEMP/mujoco"
+          printf 'MUJOCO_DYNAMIC_LINK_DIR=%s/lib\n' "$RUNNER_TEMP/mujoco" >> "$GITHUB_ENV"
+      - name: Build the release executable
+        run: cargo build --release --locked --target '${{ matrix.target }}' --bin phoxal-simulator
+      - name: Package the complete application
+        id: package
+        run: |
+          engine="$(pwd)/.release-mujoco"
+          mv "$RUNNER_TEMP/mujoco" "$engine"
+          binary="target/${{ matrix.target }}/release/phoxal-simulator"
+          version="${VERSION}"
+          sha="${SHA}"
+          source_sha256="${SOURCE_SHA256}"
+          if [ "$(uname -s)" = Darwin ]; then
+            app="$RUNNER_TEMP/Phoxal Simulator.app"
+            bash .github/scripts/package-macos.sh "$binary" "$engine" "$app" "$version" "$sha" "$source_sha256"
+            dmg="$RUNNER_TEMP/phoxal-simulator-$version-aarch64-apple-darwin.dmg"
+            bash .github/scripts/create-dmg.sh "$app" "$dmg"
+            artifact="$dmg"
+          else
+            case '${{ matrix.target }}' in
+              x86_64-unknown-linux-gnu) arch=x86_64 ;;
+              *) arch=aarch64 ;;
+            esac
+            package="$RUNNER_TEMP/phoxal-simulator-$version-$arch-linux"
+            bash .github/scripts/package-linux.sh "$binary" "$engine" "$package" "$version" "$sha" "$source_sha256"
+            artifact="$package.tar.gz"
+          fi
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+      - name: Smoke the extracted application without the checkout engine
+        timeout-minutes: 2
+        run: |
+          bash .github/scripts/smoke-extracted.sh '${{ steps.package.outputs.artifact }}' "$RUNNER_TEMP/extracted-smoke"
+      - name: Record the final artifact checksum
+        run: |
+          cd "$(dirname "${{ steps.package.outputs.artifact }}")"
+          shasum -a 256 "$(basename "${{ steps.package.outputs.artifact }}")" | tee final-checksum.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ matrix.target }}
+          path: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ runner.temp }}/final-checksum.txt
+          if-no-files-found: error
+
+  release:
+    name: Prepare the draft release
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Seal the exact flat downloadable assets
+        run: bash .github/scripts/release-policy.sh seal '${{ needs.resolve.outputs.version }}' artifacts sealed
+      - name: Create or refresh the same-source draft release
+        run: |
+          tag="${{ needs.resolve.outputs.tag }}"
+          version="${{ needs.resolve.outputs.version }}"
+          sha="${{ needs.resolve.outputs.sha }}"
+          title="Phoxal Simulator v$version"
+          body="Complete applications for manual download and install.
+          Built from source $sha (archive sha256 ${{ needs.resolve.outputs.source_sha256 }}).
+          Ad-hoc signatures only: no Developer ID, notarization or stapling.
+          The macOS arm64 disk image contains the application with its private exact MuJoCo engine; drag it into Applications.
+          The Linux archives are relocatable per-architecture directories with the executable and its private engine; extract and run bin/phoxal-simulator.
+          This draft is published by a human after review; artifacts are never replaced after publication."
+          bash .github/scripts/release-policy.sh guard "$version" "$sha"
+          assets=(sealed/*.dmg sealed/*.tar.gz)
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+            [ "$draft" = true ] || { echo "::error::$tag is already published"; exit 1; }
+            target="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)"
+            [ "$target" = "$sha" ] || { echo "::error::$tag draft belongs to source $target, not $sha"; exit 1; }
+            echo "Refreshing same-source draft $tag"
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+          gh release create "$tag" "${assets[@]}" sealed/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --draft --title "$title" --target "$sha" \
+            --notes "$body"
+          echo "Draft $tag prepared with ${#assets[@]} application artifacts plus SHA256SUMS.txt; a human publishes it."

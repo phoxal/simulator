@@ -1,10 +1,11 @@
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 compile_error!("Phoxal supports Linux and macOS only");
 
+mod app;
 mod application_contract;
 mod contract;
 mod lifecycle;
-mod native_binding;
+mod native_runtime;
 
 mod authority;
 mod bindings;
@@ -14,6 +15,7 @@ mod cancellation;
 mod composition;
 mod config;
 mod desktop;
+mod document;
 mod execution;
 mod georeference;
 pub mod mujoco;
@@ -23,29 +25,28 @@ mod observations;
 mod process_output;
 mod remote;
 mod runtime;
-mod setup;
 
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     use clap::Parser as _;
     let cli = config::Cli::parse();
-    if let Err(error) = setup::configure_root(cli.runtime_root) {
-        write_error(&error);
-        return ExitCode::FAILURE;
-    }
     let result = match cli.command {
-        Some(config::AppCommand::Run(args)) => lifecycle::run(args.into_options()),
+        Some(config::AppCommand::Smoke) => app::world::smoke(),
+        Some(config::AppCommand::Run(args)) => {
+            let options = args.into_options();
+            if options.presentation == config::Presentation::Desktop {
+                desktop::run(options).map(|_| ())
+            } else {
+                lifecycle::run(options)
+            }
+        }
         Some(config::AppCommand::Probe(args)) => lifecycle::run(args.into_options()),
         Some(config::AppCommand::StageScene(args)) => return stage_scene(args),
-        Some(config::AppCommand::Setup) => {
-            setup::run_cli().map(|path| println!("MuJoCo 3.12.0 is ready at {}", path.display()))
-        }
         None => desktop::idle().map(|_| ()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) if error.is_empty() => ExitCode::SUCCESS,
         Err(error) => {
             write_error(&error);
             ExitCode::FAILURE

@@ -1,0 +1,15 @@
+# Repository-local defaults for linking the private MuJoCo engine during
+# ordinary source builds (terminal Cargo, IDE sync and IDE Run).
+#
+# The relative value resolves against this repository root at Cargo
+# configuration load, so mujoco-rs receives an absolute link directory without
+# any contributor-specific absolute path being committed. Provision the engine
+# once with .github/scripts/provision-mujoco.sh (see README "Contributor
+# source builds"); a missing engine fails the build with the exact expected
+# directory instead of silently using a system installation.
+#
+# `force` stays false: CI and release provisioning set MUJOCO_DYNAMIC_LINK_DIR
+# explicitly in the job environment, and an existing environment value always
+# wins over this file.
+[env]
+MUJOCO_DYNAMIC_LINK_DIR = { value = ".local-mujoco/lib", relative = true }

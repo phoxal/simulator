@@ -10,11 +10,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, CString};
 use std::fmt;
 
-use crate::native_binding::mujoco_c::{
+use mujoco_rs::mujoco_c::{
     mj_compile, mj_deleteModel, mjs_attach, mjs_getError, mjs_setDeepCopy, mjsElement,
 };
-use crate::native_binding::prelude::MjSpec;
-use crate::native_binding::wrappers::{MjVfs, SpecItem};
+use mujoco_rs::prelude::MjSpec;
+use mujoco_rs::wrappers::{MjVfs, SpecItem};
 use sha2::{Digest, Sha256};
 
 use crate::mujoco::artifact::{ClosedModel, Resource};
@@ -31,7 +31,7 @@ pub const NAMESPACE_SEPARATOR: &str = "__";
 /// inferred from a capability declaration or from a port name.  The default
 /// namespace is `{instance}__`, which makes every attached component name
 /// deterministic and prevents repeated component instances from colliding.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ComponentAttachment {
     instance: String,
     component: ClosedModel,
@@ -112,7 +112,7 @@ impl ComponentAttachment {
 }
 
 /// A deterministic parent scene plus its fixed native component attachments.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ModelComposition {
     scene: ClosedModel,
     attachments: Vec<ComponentAttachment>,
@@ -264,12 +264,13 @@ impl ModelComposition {
 /// The robot closure is composed first, then its single direct root body is
 /// attached to the scene target.  This keeps scene-owned global settings and
 /// georeference metadata separate from robot/component authoring.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SceneComposition {
     scene: ClosedModel,
     robot: ClosedModel,
     robot_instance: String,
     scene_target_site: String,
+    placement: Option<([f64; 3], [f64; 4])>,
     robot_root: String,
     attachments: Vec<ComponentAttachment>,
 }
@@ -296,9 +297,16 @@ impl SceneComposition {
             robot,
             robot_instance,
             scene_target_site,
+            placement: None,
             robot_root,
             attachments,
         })
+    }
+
+    /// Applies a confirmed world-site placement to the candidate specification.
+    pub(crate) fn with_placement(mut self, placement: Option<([f64; 3], [f64; 4])>) -> Self {
+        self.placement = placement;
+        self
     }
 
     /// Compiles the fixed robot and scene composition into one immutable model.
@@ -378,6 +386,20 @@ impl SceneComposition {
                 self.scene_target_site
             )));
         }
+        if let Some((position, quaternion)) = self.placement {
+            if !position
+                .iter()
+                .chain(quaternion.iter())
+                .all(|v| v.is_finite())
+            {
+                return Err(composition_model_error("placement is not finite"));
+            }
+            let site = scene_spec
+                .site_mut(&self.scene_target_site)
+                .ok_or_else(|| composition_model_error("placement attachment is missing"))?;
+            *site.pos_mut() = position;
+            *site.quat_mut() = quaternion;
+        }
         attach_spec(
             &scene_spec,
             &robot_spec,
@@ -393,7 +415,7 @@ impl SceneComposition {
         compile_spec_with_vfs(&mut scene_spec, &scene_vfs)?;
         let serialized = serialize_spec(&scene_spec)?;
         let artifact = self.composed_artifact(serialized, &robot_resource_prefix)?;
-        Model::from_closed(artifact)
+        Model::from_closed(artifact)?.with_robot_root(&format!("{robot_prefix}{robot_root}"))
     }
 
     fn composed_artifact(
@@ -696,7 +718,7 @@ pub fn compose_model(
 }
 
 fn parse_spec_with_prefix(artifact: &ClosedModel, prefix: &str) -> Result<ParsedSpec, ModelError> {
-    crate::native_binding::initialize().map_err(composition_model_error)?;
+    crate::native_runtime::initialize().map_err(composition_model_error)?;
     let mut vfs = MjVfs::new();
     for resource in artifact.resources() {
         let name = format!("{prefix}{}", resource.name());
@@ -717,7 +739,7 @@ fn parse_spec_with_prefixed_resources(
     artifact: &ClosedModel,
     extras: &[(&ClosedModel, String)],
 ) -> Result<ParsedSpec, ModelError> {
-    crate::native_binding::initialize().map_err(composition_model_error)?;
+    crate::native_runtime::initialize().map_err(composition_model_error)?;
     let mut vfs = MjVfs::new();
     for resource in artifact.resources() {
         vfs.add_from_buffer(resource.name(), resource.bytes())
@@ -802,7 +824,7 @@ fn serialize_spec(spec: &MjSpec) -> Result<Vec<u8>, ModelError> {
     loop {
         match spec.save_xml_string(buffer_size) {
             Ok(xml) => return Ok(xml.into_bytes()),
-            Err(crate::native_binding::error::MjEditError::XmlBufferTooSmall { required_size }) => {
+            Err(mujoco_rs::error::MjEditError::XmlBufferTooSmall { required_size }) => {
                 buffer_size = required_size.checked_add(1).ok_or_else(|| {
                     composition_model_error("composed XML size overflows native buffer")
                 })?;
@@ -854,7 +876,7 @@ fn compile_spec_with_vfs(spec: &mut MjSpec, vfs: &MjVfs) -> Result<(), ModelErro
     Ok(())
 }
 
-fn validate_scene_policy(scene: &ClosedModel) -> Result<(), ModelError> {
+pub(crate) fn validate_scene_policy(scene: &ClosedModel) -> Result<(), ModelError> {
     validate_xml_policy(scene, "scene", &["keyframe"])
 }
 
@@ -875,8 +897,13 @@ fn validate_xml_policy(
         let Ok(text) = std::str::from_utf8(resource.bytes()) else {
             continue;
         };
+        if !text.trim_start().starts_with('<') {
+            continue;
+        }
+        let names = super::artifact::xml_element_names(resource.name(), text)
+            .map_err(|error| composition_model_error(error.to_string()))?;
         for tag in forbidden_tags {
-            if contains_xml_tag(text, tag) {
+            if names.iter().any(|name| name == tag) {
                 return Err(composition_model_error(format!(
                     "{owner} resource {:?} contains forbidden global <{tag}>; global scene settings and keyframes are owned by the root scene",
                     resource.name()
@@ -885,27 +912,6 @@ fn validate_xml_policy(
         }
     }
     Ok(())
-}
-
-fn contains_xml_tag(xml: &str, expected: &str) -> bool {
-    let bytes = xml.as_bytes();
-    let mut index = 0;
-    while let Some(relative) = bytes[index..].iter().position(|byte| *byte == b'<') {
-        index += relative + 1;
-        if index >= bytes.len() || matches!(bytes[index], b'!' | b'?' | b'/') {
-            continue;
-        }
-        let start = index;
-        while index < bytes.len()
-            && !matches!(bytes[index], b'>' | b'/' | b' ' | b'\t' | b'\r' | b'\n')
-        {
-            index += 1;
-        }
-        if &bytes[start..index] == expected.as_bytes() {
-            return true;
-        }
-    }
-    false
 }
 
 fn composition_manifest(composition: &ModelComposition) -> Vec<u8> {
@@ -1044,6 +1050,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(native_qualification)]
     fn authored_mesh_content_type_is_not_replaced_by_its_file_extension() {
         let artifact = ClosedModel::new("model.xml", [
             Resource::new("model.xml", br#"<mujoco><asset><mesh name="shell" content_type="model/stl" file="mesh.obj"/></asset><worldbody><geom type="mesh" mesh="shell"/></worldbody></mujoco>"#).unwrap(),
@@ -1064,6 +1071,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(native_qualification)]
     fn mixed_case_extensions_resolve_native_content_type_defaults() {
         // Parsing verifies the case-insensitive default independently of decoder availability.
         // The qualified distro's decoder accepts .obj/.OBJ but refuses .oBj.
@@ -1093,6 +1101,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(native_qualification)]
     fn composed_mesh_identity_is_stable_across_cold_and_warm_native_asset_cache() {
         for filename in [
             "cache-regression.obj",
@@ -1185,6 +1194,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(native_qualification)]
     fn nested_scene_entries_retain_root_relative_resources_for_portable_output() {
         let scene = ClosedModel::new(
             "sub/model.xml",
@@ -1213,6 +1223,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(native_qualification)]
     fn global_component_settings_and_keyframes_are_rejected() {
         let scene = ClosedModel::from_xml(br#"<mujoco model="scene"><worldbody/></mujoco>"#)
             .expect("scene artifact");
@@ -1231,6 +1242,7 @@ mod tests {
 
     #[cfg(feature = "native")]
     #[test]
+    #[cfg(native_qualification)]
     fn native_attach_compiles_prefixed_component_objects() {
         let scene = ClosedModel::from_xml(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1294,6 +1306,7 @@ mod tests {
     }
 
     #[cfg(feature = "native")]
+    #[cfg(native_qualification)]
     fn component_with_mesh() -> ClosedModel {
         ClosedModel::new(
             "model.xml",
@@ -1315,6 +1328,7 @@ mod tests {
 
     #[cfg(feature = "native")]
     #[test]
+    #[cfg(native_qualification)]
     fn independent_compositions_do_not_share_native_children() {
         let scene = ClosedModel::from_xml(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1362,6 +1376,7 @@ mod tests {
 
     #[cfg(feature = "native")]
     #[test]
+    #[cfg(native_qualification)]
     fn scene_composition_attaches_robot_after_component_composition() {
         let scene = ClosedModel::from_xml(
             br#"<mujoco model="outer-scene"><option timestep="0.01"/><worldbody><site name="robot_mount"/></worldbody></mujoco>"#,

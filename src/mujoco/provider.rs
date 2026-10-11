@@ -665,7 +665,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, native_qualification))]
 mod tests {
     use super::*;
     use crate::mujoco::{ClosedModel, Model};

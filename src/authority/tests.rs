@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(native_qualification)]
 use crate::remote::RemoteSceneRun;
 use phoxal::communication::session::MethodShape;
 use std::sync::{Arc, Mutex};
@@ -8,11 +9,15 @@ struct Peer(Arc<Mutex<PeerState>>);
 #[derive(Default)]
 struct PeerState {
     acquired: bool,
+    cancel_on_reset: Option<crate::cancellation::Cancellation>,
+    refill_on_reset: Option<tokio::sync::mpsc::Sender<crate::app::Command>>,
+    prepare_gate: Option<Arc<tokio::sync::Notify>>,
+    prepare_entered: bool,
     release_calls: usize,
     fail_release: bool,
     progress_calls: usize,
-    stop_after_progress: Option<(usize, tokio::sync::mpsc::Sender<crate::desktop::Command>)>,
-    stop_at: Option<(u64, tokio::sync::mpsc::Sender<crate::desktop::Command>)>,
+    stop_after_progress: Option<(usize, tokio::sync::mpsc::Sender<crate::app::Command>)>,
+    stop_at: Option<(u64, tokio::sync::mpsc::Sender<crate::app::Command>)>,
     hardware: bool,
     boundary: u64,
     timeline: u64,
@@ -48,7 +53,7 @@ impl Peer {
             && let Some((boundary, sender)) = &state.stop_at
             && *boundary == next_boundary
         {
-            sender.try_send(crate::desktop::Command::Stop).unwrap();
+            sender.try_send(crate::app::Command::Stop).unwrap();
         }
         state.receipts.push(receipt.clone());
         if state.lost_reply == Some(phase) {
@@ -113,6 +118,14 @@ impl SimulationTransport for Peer {
         r: PrepareBoundaryRequest,
     ) -> SimulationFuture<'_, PrepareBoundaryResponse, String> {
         Box::pin(async move {
+            let gate = {
+                let mut state = self.0.lock().unwrap();
+                state.prepare_entered = true;
+                state.prepare_gate.clone()
+            };
+            if let Some(gate) = gate {
+                gate.notified().await;
+            }
             let key = r.transition_key.as_ref().unwrap();
             let payload = phoxal::contracts::component::actuator::ActuatorCommand {
                 control: Some(phoxal::contracts::component::actuator::Control::VelocityRadps(1.0)),
@@ -176,7 +189,7 @@ impl SimulationTransport for Peer {
             if let Some((count, sender)) = &state.stop_after_progress
                 && state.progress_calls == *count
             {
-                sender.try_send(crate::desktop::Command::Stop).unwrap();
+                sender.try_send(crate::app::Command::Stop).unwrap();
             }
             Ok(ProgressResponse {
                 execution_id: "execution".into(),
@@ -193,6 +206,14 @@ impl SimulationTransport for Peer {
         Box::pin(async move {
             let mut state = self.0.lock().unwrap();
             state.timeline += 1;
+            if let Some(cancel) = &state.cancel_on_reset {
+                cancel.cancel();
+            }
+            if state.timeline == 1
+                && let Some(sender) = &state.refill_on_reset
+            {
+                while sender.try_send(crate::app::Command::Reset).is_ok() {}
+            }
             state.boundary = 0;
             state.receipts.clear();
             let response = ResetResponse {
@@ -353,6 +374,7 @@ async fn reset_rotates_timeline_and_requires_new_initial_cut() {
     );
 }
 
+#[cfg(native_qualification)]
 #[tokio::test]
 async fn lost_reply_stops_native_run_without_reintegration() {
     for lost in [PhaseStatus::Prepared, PhaseStatus::ObservationsAdmitted] {
@@ -393,15 +415,16 @@ async fn lost_reset_reply_fails_without_retry() {
 }
 
 /// Exercise the actual boundary coordinator, typed command queue and native owner.
+#[cfg(native_qualification)]
 #[tokio::test]
 async fn desktop_commands_pause_step_reset_modes_and_channel_close() {
-    use crate::desktop::{Command, DisplayState, Worker};
+    use crate::app::{Command, RunState, Worker};
     use crate::execution::Pacing;
     for complete in [false, true] {
         let (mut run, model, peer) = native_run().await;
         let original_generation = run.generation();
         let (sender, commands) = tokio::sync::mpsc::channel(8);
-        let display = Arc::new(Mutex::new(DisplayState::default()));
+        let display = Arc::new(Mutex::new(RunState::default()));
         // Run followed by Pause must not produce a hidden boundary.
         for command in [
             Command::Run,
@@ -446,12 +469,13 @@ async fn desktop_commands_pause_step_reset_modes_and_channel_close() {
     }
 }
 
+#[cfg(native_qualification)]
 #[tokio::test]
 async fn paused_native_coordinator_renews_watchdog_without_advancing() {
-    use crate::desktop::{DisplayState, Worker};
+    use crate::app::{RunState, Worker};
     let (mut run, model, peer) = native_run().await;
     let (sender, commands) = tokio::sync::mpsc::channel(8);
-    let display = Arc::new(Mutex::new(DisplayState::default()));
+    let display = Arc::new(Mutex::new(RunState::default()));
     // Stop on observed watchdog traffic, not a wall-time race with concurrent
     // renderer tests. The timeout only bounds a genuinely stalled coordinator.
     peer.0.lock().unwrap().stop_after_progress = Some((2, sender));
@@ -477,6 +501,7 @@ async fn paused_native_coordinator_renews_watchdog_without_advancing() {
     run.release().await.unwrap();
 }
 
+#[cfg(native_qualification)]
 async fn native_run() -> (
     RemoteSceneRun<Peer, crate::native_provider::ComponentProvider>,
     crate::mujoco::Model,
@@ -496,6 +521,7 @@ async fn native_run() -> (
     (run, model, peer)
 }
 
+#[cfg(native_qualification)]
 fn native_inputs() -> (
     crate::mujoco::Model,
     crate::native_provider::ComponentProvider,
@@ -530,7 +556,9 @@ fn native_inputs() -> (
     (model, provider)
 }
 
+#[cfg(native_qualification)]
 struct FailedObservation(crate::native_provider::ComponentProvider);
+#[cfg(native_qualification)]
 impl crate::remote::NativeProvider for FailedObservation {
     type Error = String;
     fn providers(&self) -> &ProviderSet {
@@ -552,6 +580,7 @@ impl crate::remote::NativeProvider for FailedObservation {
     }
 }
 
+#[cfg(native_qualification)]
 #[tokio::test]
 async fn post_grant_initialization_failure_releases_or_reports_uncertain_remote_cleanup() {
     for fail_release in [false, true] {
@@ -605,9 +634,10 @@ async fn post_grant_initialization_failure_releases_or_reports_uncertain_remote_
     assert!(state.acquired);
 }
 
+#[cfg(native_qualification)]
 #[tokio::test]
 async fn long_native_desktop_run_retains_current_or_complete_evidence_explicitly() {
-    use crate::desktop::{Command, DisplayState, Worker};
+    use crate::app::{Command, RunState, Worker};
     for complete in [false, true] {
         let (mut run, model, peer) = native_run().await;
         let (sender, commands) = tokio::sync::mpsc::channel(8);
@@ -616,7 +646,7 @@ async fn long_native_desktop_run_retains_current_or_complete_evidence_explicitly
             .try_send(Command::SetPacing(crate::execution::Pacing::Fast))
             .unwrap();
         sender.try_send(Command::Run).unwrap();
-        let display = Arc::new(Mutex::new(DisplayState::default()));
+        let display = Arc::new(Mutex::new(RunState::default()));
         let history = crate::execution::drive(
             &mut run,
             &model,
@@ -644,4 +674,134 @@ async fn long_native_desktop_run_retains_current_or_complete_evidence_explicitly
         }
         run.release().await.unwrap();
     }
+}
+
+#[cfg(native_qualification)]
+#[tokio::test]
+async fn latched_stop_during_acknowledged_reset_preempts_a_refilled_queue() {
+    use crate::app::{Command, RunHandle, RunState, Worker};
+    let (mut run, model, peer) = native_run().await;
+    let generation = run.generation();
+    let (sender, commands) = tokio::sync::mpsc::channel(8);
+    let cancel = crate::cancellation::Cancellation::default();
+    let handle = RunHandle {
+        commands: sender.clone(),
+        cancel: cancel.clone(),
+    };
+    for _ in 0..8 {
+        handle.send(Command::Reset).unwrap();
+    }
+    {
+        let mut state = peer.0.lock().unwrap();
+        state.cancel_on_reset = Some(cancel.clone());
+        state.refill_on_reset = Some(sender);
+    }
+    let display = Arc::new(Mutex::new(RunState::default()));
+    crate::execution::drive(
+        &mut run,
+        &model,
+        u64::MAX,
+        Some(Worker {
+            commands,
+            cancel: cancel.clone(),
+            display,
+        }),
+        false,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(cancel.is_cancelled());
+    assert_eq!(
+        run.generation(),
+        generation + 1,
+        "no queued mutation after latched Stop"
+    );
+    assert_eq!(peer.0.lock().unwrap().timeline, 1);
+    assert!(handle.send(Command::Run).is_err());
+    handle.send(Command::Stop).unwrap();
+    run.release().await.unwrap();
+    assert_eq!(peer.0.lock().unwrap().release_calls, 1);
+}
+
+#[cfg(native_qualification)]
+#[tokio::test]
+async fn outstanding_boundary_presents_completed_frames_and_observes_stop_without_abandoning_ack() {
+    use crate::app::{Command, RunHandle, RunState, Worker};
+    use std::time::{Duration, Instant};
+    let (mut run, model, peer) = native_run().await;
+    let gate = Arc::new(tokio::sync::Notify::new());
+    peer.0.lock().unwrap().prepare_gate = Some(gate.clone());
+    let (sender, commands) = tokio::sync::mpsc::channel(8);
+    let cancel = crate::cancellation::Cancellation::default();
+    let handle = RunHandle {
+        commands: sender,
+        cancel: cancel.clone(),
+    };
+    handle.send(Command::Step).unwrap();
+    let display = Arc::new(Mutex::new(RunState::default()));
+    let controller = async {
+        let started = Instant::now();
+        loop {
+            if peer.0.lock().unwrap().prepare_entered
+                && display
+                    .lock()
+                    .unwrap()
+                    .frame
+                    .as_ref()
+                    .is_some_and(|frame| frame.view.identity.serial >= 3)
+            {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "presentation did not remain responsive while acknowledgement held"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        for _ in 0..8 {
+            handle.send(Command::Reset).unwrap();
+        }
+        handle.send(Command::Stop).unwrap(); // Actual production latch bypasses the full queue.
+        assert!(handle.send(Command::Pause).is_err());
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let state = display.lock().unwrap();
+        assert!(state.stopping);
+        assert_eq!(state.boundary, 0);
+        assert_eq!(
+            peer.0.lock().unwrap().boundary,
+            0,
+            "authority operation remains in flight"
+        );
+        drop(state);
+        gate.notify_one();
+        println!(
+            "held boundary: >=3 completed-state frames, Stop observed before acknowledgement; elapsed {:?}",
+            started.elapsed()
+        );
+    };
+    let worker = Worker {
+        commands,
+        cancel,
+        display: display.clone(),
+    };
+    let (result, ()) = tokio::join!(
+        crate::execution::drive(&mut run, &model, u64::MAX, Some(worker), false, false),
+        controller
+    );
+    let history = result.unwrap();
+    assert_eq!(
+        run.boundary(),
+        1,
+        "one acknowledged ordinary Step, no queued reset"
+    );
+    assert_eq!(history.last().unwrap().time_seconds(), 0.002);
+    assert_eq!(peer.0.lock().unwrap().timeline, 0);
+    assert_eq!(
+        display.lock().unwrap().boundary,
+        1,
+        "final acknowledged status retained"
+    );
+    run.release().await.unwrap();
+    assert_eq!(peer.0.lock().unwrap().release_calls, 1);
 }

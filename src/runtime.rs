@@ -1,3 +1,4 @@
+use crate::app::{Completion, RunOutcome};
 use crate::bindings::ProbeFacts;
 use crate::bindings::build_provider;
 use crate::bindings::probe_contract;
@@ -15,58 +16,125 @@ use serde::Serialize;
 
 pub(super) const CONTROL_PRINCIPAL: &str = "simulator";
 
-pub(super) struct PreparedNative {
+pub(super) struct PreparedRun {
     bundle: BundleFacts,
     model: Model,
-    quantum_ns: u64,
     provider: ComponentProvider,
-    pub(super) context: phoxal::artifact::simulation_context::SimulationContext,
 }
 
-pub(super) fn prepare(options: &Options) -> Result<PreparedNative, String> {
-    let mut bundle = BundleFacts::load(&options.bundle)?;
+impl PreparedRun {
+    pub(super) fn model(&self) -> &Model {
+        &self.model
+    }
+    pub(super) fn bundle(&self) -> &BundleFacts {
+        &self.bundle
+    }
+    pub(super) fn verify_sources(&self) -> Result<(), String> {
+        let current = crate::bundle::read_bounded_regular(
+            &self.bundle.root.join("manifest.json"),
+            16 * 1024 * 1024,
+        )?;
+        if current != self.bundle.manifest_bytes {
+            return Err("Prepared build manifest changed; import the build again".into());
+        }
+        let mut closures = vec![(
+            "__phoxal_robot__/".to_owned(),
+            self.bundle.root_closed_model()?,
+        )];
+        for (instance, selected) in &self.bundle.components {
+            let (definition, _) = crate::bundle::component_definition(&selected.definition);
+            closures.push((
+                format!("__phoxal_robot_components__/{instance}/"),
+                self.bundle
+                    .component_closed_model(selected, &definition.file)?,
+            ));
+        }
+        for (prefix, closed) in closures {
+            let expected = self
+                .model
+                .artifact()
+                .resources()
+                .filter(|r| r.name().starts_with(&prefix))
+                .collect::<Vec<_>>();
+            if expected.len() != closed.resources().len()
+                || closed.resources().any(|r| {
+                    !expected.iter().any(|e| {
+                        e.name() == format!("{prefix}{}", r.name()) && e.bytes() == r.bytes()
+                    })
+                })
+            {
+                return Err(
+                    "Prepared model/component resource bytes changed; import the build again"
+                        .into(),
+                );
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn context(&self) -> phoxal::artifact::simulation_context::SimulationContext {
+        phoxal::artifact::simulation_context::SimulationContext::new(
+            &self.bundle.manifest_bytes,
+            self.bundle
+                .admitted
+                .simulation
+                .as_ref()
+                .expect("preparation admits native facts")
+                .clone(),
+        )
+    }
+}
+
+pub(super) fn prepare(options: &Options, bundle: BundleFacts) -> Result<PreparedRun, String> {
     let model = load_composed_model(&options.scene, &bundle)?;
+    prepare_model(model, bundle)
+}
+
+pub(super) fn prepare_model(model: Model, mut bundle: BundleFacts) -> Result<PreparedRun, String> {
+    if bundle.target != phoxal::artifact::application::HOST_EXECUTION_TARGET {
+        return Err(format!(
+            "Prepared build target {} cannot run on {}",
+            bundle.target,
+            phoxal::artifact::application::HOST_EXECUTION_TARGET
+        ));
+    }
     let simulation = crate::bindings::simulation_definition(&bundle, &model)?;
-    let quantum_ns = simulation.quantum_ns;
-    let manifest =
-        crate::bundle::read_bounded_regular(&bundle.root.join("manifest.json"), 16 * 1024 * 1024)?;
-    let context =
-        phoxal::artifact::simulation_context::SimulationContext::new(&manifest, simulation.clone());
-    context.clone().admit(&manifest, &mut bundle.admitted)?;
-    bundle.simulation = Some(simulation);
+    let context = phoxal::artifact::simulation_context::SimulationContext::new(
+        &bundle.manifest_bytes,
+        simulation,
+    );
+    context.admit(&bundle.manifest_bytes, &mut bundle.admitted)?;
     // Resolve native inputs/outputs before any supervisor or participant starts.
     let provider = build_provider(
         &bundle,
         &model,
         bundle.simulation.as_ref().ok_or("missing native facts")?,
     )?;
-    Ok(PreparedNative {
+    Ok(PreparedRun {
         bundle,
         model,
-        quantum_ns,
         provider,
-        context,
     })
 }
 
 pub(super) async fn run(
     options: Options,
-    desktop: Option<crate::desktop::Worker>,
-    prepared: PreparedNative,
-) -> Result<Option<crate::runtime::TerminalEvidence>, String> {
+    desktop: Option<crate::app::Worker>,
+    prepared: &PreparedRun,
+) -> Result<RunOutcome, String> {
     let cancel = desktop
         .as_ref()
         .map(|owner| owner.cancel.clone())
         .unwrap_or_default();
     let display = desktop.as_ref().map(|owner| owner.display.clone());
-    let PreparedNative {
-        bundle,
-        model,
-        quantum_ns,
-        provider,
-        ..
-    } = prepared;
+    let bundle = &prepared.bundle;
+    let model = prepared.model.clone();
+    let provider = prepared.provider.fresh();
 
+    let quantum_ns = bundle
+        .simulation
+        .as_ref()
+        .ok_or("missing native facts")?
+        .quantum_ns;
     if options.probe {
         if !options.json {
             return Err(
@@ -74,7 +142,7 @@ pub(super) async fn run(
                     .to_owned(),
             );
         }
-        let contract = probe_contract(&bundle, &model)?;
+        let contract = probe_contract(bundle, &model)?;
         let facts = ProbeFacts {
             model_identity: model.identity().to_hex(),
             quantum_ns,
@@ -85,7 +153,7 @@ pub(super) async fn run(
             "{}",
             serde_json::to_string(&facts).map_err(|error| error.to_string())?
         );
-        return Ok(None);
+        return Ok(RunOutcome::Probed);
     }
 
     let simulation = bundle
@@ -103,12 +171,6 @@ pub(super) async fn run(
             "native context model identity {} does not match composed native model {}",
             simulation.model_identity,
             model.identity().to_hex()
-        ));
-    }
-    if simulation.quantum_ns != quantum_ns {
-        return Err(format!(
-            "native context quantum {}ns does not match composed native quantum {}ns",
-            simulation.quantum_ns, quantum_ns
         ));
     }
 
@@ -145,7 +207,7 @@ pub(super) async fn run(
     let connection = tokio::select! {
         biased;
         result = phoxal::session::connect(config) => result.map_err(|error| error.to_string())?,
-        _ = cancel.wait() => return Ok(None),
+        _ = cancel.wait() => return Ok(RunOutcome::Cancelled),
     };
     let selected = tokio::select! {
         biased;
@@ -156,7 +218,7 @@ pub(super) async fn run(
         Ok(None) => {
             stopping(&display);
             return cleanup_outcome(
-                Ok(None),
+                Ok(RunOutcome::Cancelled),
                 connection.close().await.map_err(|e| e.to_string()),
                 &display,
                 "public session",
@@ -175,7 +237,7 @@ pub(super) async fn run(
     };
     let outcome = execute_remote_run(
         &supervisor,
-        &bundle,
+        bundle,
         model,
         provider,
         RunRequest {
@@ -199,13 +261,13 @@ pub(super) async fn run(
     )
 }
 
-type Display = Option<std::sync::Arc<std::sync::Mutex<crate::desktop::DisplayState>>>;
+type Display = Option<std::sync::Arc<std::sync::Mutex<crate::app::RunState>>>;
 
 fn stopping(display: &Display) {
     if let Some(display) = display
         && let Ok(mut state) = display.lock()
     {
-        state.phase = "Stopping";
+        state.phase = crate::app::RunStatus::Stopping;
         state.stopping = true;
     }
 }
@@ -247,8 +309,8 @@ async fn execute_remote_run(
     model: Model,
     provider: ComponentProvider,
     request: RunRequest<'_>,
-    desktop: Option<crate::desktop::Worker>,
-) -> Result<Option<TerminalEvidence>, String> {
+    desktop: Option<crate::app::Worker>,
+) -> Result<RunOutcome, String> {
     let display = desktop.as_ref().map(|owner| owner.display.clone());
     let cancel = desktop
         .as_ref()
@@ -267,7 +329,7 @@ async fn execute_remote_run(
         .await
         .map_err(|error| error.to_string())?;
     if cancel.is_cancelled() {
-        return Ok(None);
+        return Ok(RunOutcome::Cancelled);
     }
     let execution = match executions.as_slice() {
         [execution] => execution,
@@ -318,7 +380,7 @@ async fn execute_remote_run(
     // release it explicitly before classifying cancellation as complete.
     let outcome = async {
         if cancel.is_cancelled() {
-            return Ok(None);
+            return Ok(RunOutcome::Cancelled);
         }
         let snapshots = match crate::execution::drive(
             &mut run,
@@ -338,7 +400,7 @@ async fn execute_remote_run(
         if let Some(display) = &display
             && let Ok(mut state) = display.lock()
         {
-            state.phase = "Stopping";
+            state.phase = crate::app::RunStatus::Stopping;
             state.stopping = true;
         }
         let joint_name = format!("{}__base_freejoint", bundle.robot_id);
@@ -362,25 +424,32 @@ async fn execute_remote_run(
             .to_owned();
         let model_identity = run.provenance().model_identity.clone();
         let quantum_ns = run.provenance().quantum_ns;
-        Ok(Some(TerminalEvidence::V0 {
-            native_bindings,
-            provenance,
-            provider_contract_verified: true,
-            outcome: if completed_steps == requested_steps {
-                "success"
+        Ok(RunOutcome::Executed {
+            completion: if completed_steps == requested_steps {
+                Completion::Completed
             } else {
-                "stopped"
-            }
-            .to_owned(),
-            completed_steps,
-            requested_steps,
-            presentation: presentation.label().to_owned(),
-            model_identity,
-            quantum_ns,
-            execution_id: execution.execution_id.clone(),
-            timeline_id,
-            native_body,
-        }))
+                Completion::Stopped
+            },
+            evidence: Box::new(TerminalEvidence::V0 {
+                native_bindings,
+                provenance,
+                provider_contract_verified: true,
+                outcome: if completed_steps == requested_steps {
+                    "success"
+                } else {
+                    "stopped"
+                }
+                .to_owned(),
+                completed_steps,
+                requested_steps,
+                presentation: presentation.label().to_owned(),
+                model_identity,
+                quantum_ns,
+                execution_id: execution.execution_id.clone(),
+                timeline_id,
+                native_body,
+            }),
+        })
     }
     .await;
     // Every path after acknowledged acquisition attempts remote release, including
@@ -476,7 +545,7 @@ mod body_evidence_tests {
     #[test]
     fn cleanup_preserves_primary_failure_and_fences_restart_even_after_cancellation() {
         let display = Some(std::sync::Arc::new(std::sync::Mutex::new(
-            crate::desktop::DisplayState::default(),
+            crate::app::RunState::default(),
         )));
         super::stopping(&display);
         let result = super::cleanup_outcome::<()>(
@@ -510,6 +579,7 @@ mod body_evidence_tests {
         );
     }
 
+    #[cfg(native_qualification)]
     #[test]
     fn native_body_origin_velocities_use_world_axes_and_not_inertial_center() {
         let model = crate::mujoco::Model::from_xml(r#"<mujoco><worldbody><body name="root"><freejoint name="free"/><inertial pos="0.3 0.2 0.1" mass="2" diaginertia="1 1 1"/><geom size="0.1"/></body></worldbody></mujoco>"#).unwrap();

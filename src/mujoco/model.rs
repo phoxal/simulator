@@ -4,10 +4,8 @@ use std::ffi::{CStr, CString};
 use std::fmt;
 use std::sync::Arc;
 
-use crate::native_binding::prelude::{
-    MjModel, MjtBias, MjtGain, MjtJoint, MjtObj, MjtSensor, MjtTrn,
-};
-use crate::native_binding::wrappers::MjVfs;
+use mujoco_rs::prelude::{MjModel, MjtBias, MjtGain, MjtJoint, MjtObj, MjtSensor, MjtTrn};
+use mujoco_rs::wrappers::MjVfs;
 use phoxal::contracts::{MethodDescriptor, MethodShape, MethodSignature};
 
 use crate::mujoco::artifact::ClosedModel;
@@ -25,6 +23,7 @@ pub struct Model {
     inner: Arc<MjModel>,
     artifact: Arc<ClosedModel>,
     identity: ModelIdentity,
+    robot_root: Option<usize>,
 }
 
 impl Model {
@@ -39,7 +38,7 @@ impl Model {
     /// Returns [`ModelError`] when artifact admission, native parsing, or native
     /// compilation fails.
     pub fn from_closed(artifact: ClosedModel) -> Result<Self, ModelError> {
-        crate::native_binding::initialize()
+        crate::native_runtime::initialize()
             .map_err(|error| native_error("library admission", error))?;
         let mut vfs = MjVfs::new();
         for resource in artifact.resources() {
@@ -77,7 +76,19 @@ impl Model {
             inner: Arc::new(model),
             identity,
             artifact: Arc::new(artifact),
+            robot_root: None,
         })
+    }
+
+    pub(crate) fn with_robot_root(mut self, name: &str) -> Result<Self, ModelError> {
+        let body = self
+            .body(name)?
+            .ok_or_else(|| native_error("composition", "compiled robot root is missing"))?;
+        self.robot_root = Some(body.index());
+        Ok(self)
+    }
+    pub(crate) fn robot_root(&self) -> Option<usize> {
+        self.robot_root
     }
 
     /// Builds a model from one in-memory MJCF document.
@@ -102,10 +113,10 @@ impl Model {
         self.identity
     }
 
-    /// Returns the MuJoCo version of the validated runtime-loaded library.
+    /// Returns the MuJoCo version of the validated linked library.
     #[must_use]
     pub fn native_version() -> &'static str {
-        crate::native_binding::mujoco_version()
+        mujoco_rs::mujoco_version()
     }
 
     /// Returns the source-authored native physics timestep in seconds.
@@ -266,6 +277,21 @@ impl Model {
             axis: self.inner.jnt_axis()[index],
             limits,
         })
+    }
+
+    pub(crate) fn eligible_attachments(&self) -> Vec<(String, [f64; 3], [f64; 4])> {
+        (0..self.inner.nsite() as usize)
+            .filter(|&id| self.inner.site_bodyid()[id] == 0)
+            .filter_map(|id| {
+                self.inner.id_to_name(MjtObj::mjOBJ_SITE, id).map(|name| {
+                    (
+                        name.to_owned(),
+                        self.inner.site_pos()[id],
+                        self.inner.site_quat()[id],
+                    )
+                })
+            })
+            .collect()
     }
 
     /// Returns static model data for a site.
@@ -1004,7 +1030,7 @@ fn ensure_snapshot_model(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, native_qualification))]
 mod tests {
     use super::*;
     use crate::mujoco::artifact::Resource;
